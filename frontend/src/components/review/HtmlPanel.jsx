@@ -36,6 +36,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         // Inject <mark> tags for all annotations
         annotations.forEach((annot) => {
             if (annot.footnote_id) return; // Skip footnote annotations in main text container
+            if (annot.status === 'resolved') return; // Skip resolved annotations
             const range = createRangeFromOffsets(container, annot.start_offset, annot.end_offset);
             if (range) {
                 const mark = document.createElement('mark');

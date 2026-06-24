@@ -4,6 +4,7 @@ import { useDocumentStore } from './documentStore';
 
 export const useReviewStore = create((set, get) => ({
     annotations: [],
+    globalAnnotations: [],
     viewMode: 'section', // 'section' | 'page'
     currentPage: 1,
     activeFootnoteId: null,
@@ -15,6 +16,17 @@ export const useReviewStore = create((set, get) => ({
             return data;
         } catch (e) {
             console.error('Failed to fetch annotations', e);
+            return [];
+        }
+    },
+
+    fetchGlobalAnnotations: async (documentId) => {
+        try {
+            const data = await api.get(`/documents/${documentId}/annotations`);
+            set({ globalAnnotations: data });
+            return data;
+        } catch (e) {
+            console.error('Failed to fetch global annotations', e);
             return [];
         }
     },
@@ -32,12 +44,14 @@ export const useReviewStore = create((set, get) => ({
             });
 
             // Update annotations in store
-            set((state) => ({ annotations: [...state.annotations, res] }));
+            set((state) => ({ 
+                annotations: [...state.annotations, res],
+                globalAnnotations: [...state.globalAnnotations, res]
+            }));
 
             // side effects: updates active section's review status
             const docStore = useDocumentStore.getState();
             if (docStore.activeSection && docStore.activeSection.id === sectionId) {
-                // Set to has_issues
                 docStore.fetchSection(docStore.activeDocument.id, sectionId);
                 docStore.fetchSections(docStore.activeDocument.id);
             }
@@ -56,7 +70,8 @@ export const useReviewStore = create((set, get) => ({
             });
 
             set((state) => ({
-                annotations: state.annotations.map(a => a.id === annotationId ? res : a)
+                annotations: state.annotations.map(a => a.id === annotationId ? res : a),
+                globalAnnotations: state.globalAnnotations.map(a => a.id === annotationId ? res : a)
             }));
             return res;
         } catch (e) {
@@ -67,16 +82,16 @@ export const useReviewStore = create((set, get) => ({
 
     deleteAnnotation: async (annotationId) => {
         try {
-            const annotations = get().annotations;
-            const deleted = annotations.find(a => a.id === annotationId);
+            const deleted = get().globalAnnotations.find(a => a.id === annotationId) || get().annotations.find(a => a.id === annotationId);
             
             await api.delete(`/annotations/${annotationId}`);
             
             set((state) => ({
-                annotations: state.annotations.filter(a => a.id !== annotationId)
+                annotations: state.annotations.filter(a => a.id !== annotationId),
+                globalAnnotations: state.globalAnnotations.filter(a => a.id !== annotationId)
             }));
 
-            // side effects: refresh section
+            // side effects: refresh section and sidebar counts
             if (deleted) {
                 const docStore = useDocumentStore.getState();
                 docStore.fetchSection(docStore.activeDocument.id, deleted.section_id);
@@ -157,6 +172,53 @@ export const useReviewStore = create((set, get) => ({
             return res;
         } catch (e) {
             console.error('Failed to update footnote status', e);
+            throw e;
+        }
+    },
+
+    toggleAnnotationStatus: async (annotationId, currentStatus) => {
+        const nextStatus = currentStatus === 'open' ? 'resolved' : 'open';
+        try {
+            const res = await api.patch(`/annotations/${annotationId}`, {
+                status: nextStatus
+            });
+            
+            // 1. Update globalAnnotations state
+            set((state) => ({
+                globalAnnotations: state.globalAnnotations.map(a => a.id === annotationId ? { ...a, status: nextStatus } : a)
+            }));
+
+            // 2. Update active annotations state (for the active section)
+            set((state) => ({
+                annotations: state.annotations.map(a => a.id === annotationId ? { ...a, status: nextStatus } : a)
+            }));
+
+            // 3. Side effects: update parent section status
+            const docStore = useDocumentStore.getState();
+            const activeSection = docStore.activeSection;
+            
+            // Re-fetch document metadata to keep stats in sync
+            if (docStore.activeDocument) {
+                docStore.fetchDocument(docStore.activeDocument.id);
+                docStore.fetchSections(docStore.activeDocument.id);
+                
+                // If in page view, refresh page sections
+                if (get().viewMode === 'page') {
+                    docStore.fetchSectionsByPage(docStore.activeDocument.id, get().currentPage);
+                }
+            }
+            
+            // If the active section is the parent of the resolved annotation, refresh activeSection from API
+            const targetAnnot = get().globalAnnotations.find(a => a.id === annotationId);
+            if (targetAnnot) {
+                if (activeSection && activeSection.id === targetAnnot.section_id) {
+                    docStore.fetchSection(docStore.activeDocument.id, activeSection.id);
+                }
+            }
+            
+            return res;
+        } catch (e) {
+            console.error('Failed to toggle annotation status', e);
             throw e;
         }
     },

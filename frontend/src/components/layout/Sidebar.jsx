@@ -15,9 +15,26 @@ const Sidebar = ({ documentId }) => {
         clearSearch,
         loading 
     } = useDocumentStore();
-    const { annotations, deleteAnnotation, setCurrentPage } = useReviewStore();
+    const { 
+        globalAnnotations, 
+        fetchGlobalAnnotations, 
+        toggleAnnotationStatus, 
+        deleteAnnotation, 
+        setCurrentPage 
+    } = useReviewStore();
     
     const [localQuery, setLocalQuery] = useState('');
+    const [issuesSubTab, setIssuesSubTab] = useState('open');
+
+    const openIssues = globalAnnotations.filter(a => a.status === 'open');
+    const resolvedIssues = globalAnnotations.filter(a => a.status === 'resolved');
+
+    // Fetch global annotations for document
+    useEffect(() => {
+        if (documentId) {
+            fetchGlobalAnnotations(documentId);
+        }
+    }, [documentId, fetchGlobalAnnotations]);
 
     // Trigger debounced search
     useEffect(() => {
@@ -123,7 +140,7 @@ const Sidebar = ({ documentId }) => {
                     className={`toc-tab ${sidebarTab === 'annotations' ? 'active' : ''}`}
                     onClick={() => setSidebarTab('annotations')}
                 >
-                    Issues ({annotations.length})
+                    Issues ({openIssues.length})
                 </button>
             </div>
 
@@ -178,40 +195,87 @@ const Sidebar = ({ documentId }) => {
 
                 {sidebarTab === 'annotations' && (
                     <div className="annotation-list">
-                        <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--color-text-muted)' }}>
-                            Section Mismatches
-                        </h4>
+                        <div className="issues-subtabs flex" style={{ padding: '0 8px 12px 8px', gap: 8, borderBottom: '1px solid var(--color-border)' }}>
+                            <button
+                                className={`btn ${issuesSubTab === 'open' ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ padding: '4px 12px', fontSize: '0.75rem', flex: 1, height: 28 }}
+                                onClick={() => setIssuesSubTab('open')}
+                            >
+                                Open ({openIssues.length})
+                            </button>
+                            <button
+                                className={`btn ${issuesSubTab === 'resolved' ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ padding: '4px 12px', fontSize: '0.75rem', flex: 1, height: 28 }}
+                                onClick={() => setIssuesSubTab('resolved')}
+                            >
+                                Resolved ({resolvedIssues.length})
+                            </button>
+                        </div>
                         
-                        {annotations.length === 0 ? (
-                            <div style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem', padding: 12, textAlign: 'center' }}>
-                                No issues reported for this section.
-                            </div>
-                        ) : (
-                            annotations.map(a => (
-                                <div key={a.id} className="annotation-card" data-severity={a.severity}>
-                                    <button 
-                                        className="annotation-delete-btn" 
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            deleteAnnotation(a.id);
-                                        }}
-                                        title="Delete annotation"
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                    <div className="annotation-card-text">
-                                        "{a.highlighted_text}"
-                                    </div>
-                                    <div className="annotation-card-description">
-                                        {a.issue_description || 'No description'}
-                                    </div>
-                                    <div className="annotation-card-meta">
-                                        <span style={{ fontWeight: 700 }}>{a.reviewer_name || 'QA'}</span>
-                                        <span>{new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                    </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 8px', overflowY: 'auto', flex: 1 }}>
+                            {(issuesSubTab === 'open' ? openIssues : resolvedIssues).length === 0 ? (
+                                <div style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem', padding: 12, textAlign: 'center' }}>
+                                    No {issuesSubTab} issues reported.
                                 </div>
-                            ))
-                        )}
+                            ) : (
+                                (issuesSubTab === 'open' ? openIssues : resolvedIssues).map(a => {
+                                    const sec = sections.find(s => s.id === a.section_id);
+                                    const sectionLabel = sec 
+                                        ? `Sec ${sec.section_code}${a.footnote_id ? ' · Footnote' : ''}`
+                                        : `Section${a.footnote_id ? ' · Footnote' : ''}`;
+                                    
+                                    return (
+                                        <div 
+                                            key={a.id} 
+                                            className="annotation-card" 
+                                            data-severity={a.severity}
+                                            style={{ position: 'relative', cursor: 'pointer', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 6 }}
+                                            onClick={() => handleSectionClick(a.section_id)}
+                                        >
+                                            <div className="flex align-center gap-2" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <input 
+                                                    type="checkbox"
+                                                    checked={a.status === 'resolved'}
+                                                    onChange={(e) => {
+                                                        e.stopPropagation();
+                                                        toggleAnnotationStatus(a.id, a.status);
+                                                    }}
+                                                    style={{ cursor: 'pointer', width: 14, height: 14 }}
+                                                    title={a.status === 'open' ? "Mark Resolved" : "Re-open"}
+                                                />
+                                                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-secondary)' }}>
+                                                    {sectionLabel}
+                                                </span>
+                                                <button 
+                                                    className="annotation-delete-btn" 
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        if (confirm("Are you sure you want to delete this issue?")) {
+                                                            deleteAnnotation(a.id);
+                                                        }
+                                                    }}
+                                                    style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', alignItems: 'center' }}
+                                                    title="Delete annotation"
+                                                >
+                                                    <Trash2 size={12} style={{ color: 'var(--color-text-muted)' }} />
+                                                </button>
+                                            </div>
+
+                                            <div className="annotation-card-text" style={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'var(--color-text-primary)' }}>
+                                                "{a.highlighted_text}"
+                                            </div>
+                                            <div className="annotation-card-description" style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+                                                {a.issue_description || 'No description'}
+                                            </div>
+                                            <div className="annotation-card-meta" style={{ fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between', color: 'var(--color-text-muted)', marginTop: 4 }}>
+                                                <span>{a.reviewer_name || 'QA'}</span>
+                                                <span>{new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
                     </div>
                 )}
             </div>

@@ -39,7 +39,7 @@ const FootnoteText = ({ footnote, annotations, onSelect }) => {
         }
     };
 
-    const fnAnnots = annotations ? annotations.filter(a => a.footnote_id === footnote.id) : [];
+    const fnAnnots = annotations ? annotations.filter(a => a.footnote_id === footnote.id && a.status === 'open') : [];
     if (fnAnnots.length === 0) {
         return (
             <div ref={textRef} className="footnote-text" onMouseUp={handleMouseUp}>

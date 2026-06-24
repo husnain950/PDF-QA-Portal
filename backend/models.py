@@ -38,6 +38,7 @@ class AnnotationBase(BaseModel):
     severity: str = "error" # "error" | "warning" | "info"
     reviewer_name: Optional[str] = None
     footnote_id: Optional[str] = None
+    status: str = "open"
 
 class AnnotationCreate(AnnotationBase):
     pass
@@ -45,6 +46,7 @@ class AnnotationCreate(AnnotationBase):
 class AnnotationUpdate(BaseModel):
     issue_description: Optional[str] = None
     severity: Optional[str] = None
+    status: Optional[str] = None
 
 class AnnotationResponse(AnnotationBase):
     id: str

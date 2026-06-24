@@ -76,7 +76,8 @@ async def init_db():
             issue_description TEXT,
             severity      TEXT NOT NULL DEFAULT 'error',
             created_at    TEXT NOT NULL,
-            reviewer_name TEXT
+            reviewer_name TEXT,
+            status        TEXT NOT NULL DEFAULT 'open'
         );
         """)
 
@@ -90,6 +91,17 @@ async def init_db():
                 await db.commit()
             except Exception as migrate_err:
                 print(f"Migration error (footnote_id): {migrate_err}")
+
+        # Migration: Add status column to existing databases if it doesn't exist
+        try:
+            async with db.execute("SELECT status FROM annotations LIMIT 1;") as _:
+                pass
+        except Exception:
+            try:
+                await db.execute("ALTER TABLE annotations ADD COLUMN status TEXT NOT NULL DEFAULT 'open';")
+                await db.commit()
+            except Exception as migrate_err:
+                print(f"Migration error (status): {migrate_err}")
 
         # Indexes
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id);")
