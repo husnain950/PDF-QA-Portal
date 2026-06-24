@@ -27,7 +27,8 @@ export const useReviewStore = create((set, get) => ({
                 end_offset: annotationData.endOffset,
                 issue_description: annotationData.issueDescription,
                 severity: annotationData.severity,
-                reviewer_name: annotationData.reviewerName
+                reviewer_name: annotationData.reviewerName,
+                footnote_id: annotationData.footnoteId || null
             });
 
             // Update annotations in store
@@ -93,10 +94,11 @@ export const useReviewStore = create((set, get) => ({
                 review_status: status
             });
             
-            // Side effect: update active section footnotes directly in documentStore
             const docStore = useDocumentStore.getState();
+            
+            // 1. Update activeSection if it contains the footnote
             const activeSection = docStore.activeSection;
-            if (activeSection && activeSection.footnotes) {
+            if (activeSection && activeSection.footnotes && activeSection.footnotes.some(f => f.id === footnoteId)) {
                 const updatedFootnotes = activeSection.footnotes.map(fn => 
                     fn.id === footnoteId ? { ...fn, review_status: status } : fn
                 );
@@ -106,19 +108,21 @@ export const useReviewStore = create((set, get) => ({
                     newSectionStatus = 'has_issues';
                 }
 
-                docStore.setState({
+                useDocumentStore.setState({
                     activeSection: { 
                         ...activeSection, 
                         footnotes: updatedFootnotes,
                         review_status: newSectionStatus
                     }
                 });
-                
-                // If it's a page section, update it as well
-                const pageSections = docStore.pageSections;
-                docStore.setState({
+            }
+            
+            // 2. Update pageSections if they contain the footnote
+            const pageSections = docStore.pageSections;
+            if (pageSections && pageSections.length > 0) {
+                useDocumentStore.setState({
                     pageSections: pageSections.map(s => {
-                        if (s.footnotes) {
+                        if (s.footnotes && s.footnotes.some(f => f.id === footnoteId)) {
                             return {
                                 ...s,
                                 review_status: status === 'has_issues' ? 'has_issues' : s.review_status,
@@ -128,17 +132,28 @@ export const useReviewStore = create((set, get) => ({
                         return s;
                     })
                 });
+            }
 
-                // Also update the sidebar sections tree status
-                if (status === 'has_issues') {
-                    const sections = docStore.sections;
-                    docStore.setState({
-                        sections: sections.map(s => s.id === activeSection.id ? { ...s, review_status: 'has_issues' } : s)
-                    });
-                }
-                
+            // 3. Find the section ID of the footnote to update sidebar status
+            let targetSectionId = null;
+            if (activeSection && activeSection.footnotes && activeSection.footnotes.some(f => f.id === footnoteId)) {
+                targetSectionId = activeSection.id;
+            } else if (pageSections && pageSections.length > 0) {
+                const foundSec = pageSections.find(s => s.footnotes && s.footnotes.some(f => f.id === footnoteId));
+                if (foundSec) targetSectionId = foundSec.id;
+            }
+
+            if (targetSectionId && status === 'has_issues') {
+                const sections = docStore.sections;
+                useDocumentStore.setState({
+                    sections: sections.map(s => s.id === targetSectionId ? { ...s, review_status: 'has_issues' } : s)
+                });
+            }
+            
+            if (docStore.activeDocument) {
                 docStore.fetchDocument(docStore.activeDocument.id);
             }
+            
             return res;
         } catch (e) {
             console.error('Failed to update footnote status', e);

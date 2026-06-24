@@ -37,6 +37,7 @@ class AnnotationBase(BaseModel):
     issue_description: Optional[str] = None
     severity: str = "error" # "error" | "warning" | "info"
     reviewer_name: Optional[str] = None
+    footnote_id: Optional[str] = None
 
 class AnnotationCreate(AnnotationBase):
     pass

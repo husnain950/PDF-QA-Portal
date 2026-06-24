@@ -35,6 +35,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
 
         // Inject <mark> tags for all annotations
         annotations.forEach((annot) => {
+            if (annot.footnote_id) return; // Skip footnote annotations in main text container
             const range = createRangeFromOffsets(container, annot.start_offset, annot.end_offset);
             if (range) {
                 const mark = document.createElement('mark');
@@ -68,7 +69,8 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                 endOffset: selectionData.end,
                 issueDescription: data.issueDescription,
                 severity: data.severity,
-                reviewerName: data.reviewerName
+                reviewerName: data.reviewerName,
+                footnoteId: selectionData.footnoteId
             });
             handleCancelAnnotation();
         } catch (e) {
@@ -80,6 +82,16 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         clearSelection();
         setPopoverCoords(null);
         setSelectionData(null);
+    };
+
+    const handleFootnoteSelect = (footnoteId, text, start, end, coords) => {
+        setSelectionData({
+            text,
+            start,
+            end,
+            footnoteId
+        });
+        setPopoverCoords(coords);
     };
 
     return (
@@ -107,7 +119,13 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                     />
                 )}
 
-                <FootnotePanel footnotes={footnotes} />
+                <div onClick={(e) => e.stopPropagation()}>
+                    <FootnotePanel 
+                        footnotes={footnotes} 
+                        annotations={annotations}
+                        onFootnoteSelect={handleFootnoteSelect}
+                    />
+                </div>
             </div>
         </div>
     );

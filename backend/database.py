@@ -69,6 +69,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS annotations (
             id            TEXT PRIMARY KEY,
             section_id    TEXT NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+            footnote_id   TEXT REFERENCES footnotes(id) ON DELETE CASCADE,
             highlighted_text TEXT NOT NULL,
             start_offset  INTEGER NOT NULL,
             end_offset    INTEGER NOT NULL,
@@ -79,11 +80,23 @@ async def init_db():
         );
         """)
 
+        # Migration: Add footnote_id column to existing databases if it doesn't exist
+        try:
+            async with db.execute("SELECT footnote_id FROM annotations LIMIT 1;") as _:
+                pass
+        except Exception:
+            try:
+                await db.execute("ALTER TABLE annotations ADD COLUMN footnote_id TEXT REFERENCES footnotes(id) ON DELETE CASCADE;")
+                await db.commit()
+            except Exception as migrate_err:
+                print(f"Migration error (footnote_id): {migrate_err}")
+
         # Indexes
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sections_pages ON sections(document_id, start_page, end_page);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_footnotes_section ON footnotes(section_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_annotations_section ON annotations(section_id);")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_annotations_footnote ON annotations(footnote_id);")
 
         # FTS5 Virtual Table
         await db.execute("""

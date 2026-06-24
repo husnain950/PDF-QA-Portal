@@ -17,7 +17,7 @@ async def list_annotations(section_id: str, db: aiosqlite.Connection = Depends(g
             raise HTTPException(status_code=404, detail="Section not found")
 
     query = """
-        SELECT id, section_id, highlighted_text, start_offset, end_offset, issue_description, severity, created_at, reviewer_name
+        SELECT id, section_id, footnote_id, highlighted_text, start_offset, end_offset, issue_description, severity, created_at, reviewer_name
         FROM annotations
         WHERE section_id = ?
         ORDER BY created_at ASC
@@ -28,6 +28,7 @@ async def list_annotations(section_id: str, db: aiosqlite.Connection = Depends(g
     return [AnnotationResponse(
         id=r["id"],
         section_id=r["section_id"],
+        footnote_id=r["footnote_id"],
         highlighted_text=r["highlighted_text"],
         start_offset=r["start_offset"],
         end_offset=r["end_offset"],
@@ -58,11 +59,11 @@ async def create_annotation(
         # Create annotation
         await db.execute(
             """
-            INSERT INTO annotations (id, section_id, highlighted_text, start_offset, end_offset, issue_description, severity, created_at, reviewer_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO annotations (id, section_id, footnote_id, highlighted_text, start_offset, end_offset, issue_description, severity, created_at, reviewer_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                annotation_id, section_id, body.highlighted_text, body.start_offset, body.end_offset,
+                annotation_id, section_id, body.footnote_id, body.highlighted_text, body.start_offset, body.end_offset,
                 body.issue_description, body.severity, created_at, body.reviewer_name
             )
         )
@@ -87,6 +88,7 @@ async def create_annotation(
     return AnnotationResponse(
         id=annotation_id,
         section_id=section_id,
+        footnote_id=body.footnote_id,
         highlighted_text=body.highlighted_text,
         start_offset=body.start_offset,
         end_offset=body.end_offset,
@@ -125,6 +127,7 @@ async def update_annotation(
     return AnnotationResponse(
         id=annotation_id,
         section_id=existing["section_id"],
+        footnote_id=existing["footnote_id"],
         highlighted_text=existing["highlighted_text"],
         start_offset=existing["start_offset"],
         end_offset=existing["end_offset"],
