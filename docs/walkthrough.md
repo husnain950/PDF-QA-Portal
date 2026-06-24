@@ -65,15 +65,86 @@ We resolved an issue where clicking on search results from the Sidebar Search pa
 - We updated [Sidebar.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/layout/Sidebar.jsx#L35-L40)'s `handleSectionClick` action to dynamically retrieve `sec.start_page` from the fetched section document if the `startPage` argument is not explicitly provided (which is the case for search results, as the search index endpoint only provides metadata snippets).
 - The click action now correctly triggers the `setCurrentPage` state event and synchronizes the PDF canvas and parsed HTML panes simultaneously.
 
+### PDF Zoom Horizontal Scroll Fix
+We resolved an layout scrollbug where zooming in on the PDF canvas caused the left side to get clipped and prevented horizontal scrolling.
+- **Cause**: The `.pdf-scroll-container` utilized flex layout with horizontal centering (`display: flex; justify-content: center`). In browser layout engines, when a flex item overflows a centered container, it overflows equally on both sides. The left-side overflow falls behind the scroll start line (`scrollLeft = 0`) and becomes unreachable via scrolling.
+- **Fix**: Updated [index.css](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/index.css#L406-L425) to use block layout (`display: block`) for the overflow scroll container, and centered the canvas wrapper utilizing margin-auto (`margin: 0 auto; width: max-content`). When the canvas is smaller than the pane, it centers. When zoomed, it expands block-wise to the right, letting the browser trigger scrollbars for complete horizontal pan visibility.
+
+Here is the screenshot showing the zoomed PDF view with active horizontal scrolling:
+
+![Zoomed PDF with Horizontal Scroll](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/pdf_scrolled_175_1782286332974.png)
+
+### Dockerized Application Verification
+We successfully built the Docker images and launched the application stack locally via Docker Compose. The browser subagent navigated to `http://localhost:5173/` and verified that the containerized frontend can connect to the containerized backend, query the SQLite database, and load the workspace successfully.
+
+Here is the screenshot of the side-by-side view running in Docker:
+
+![Docker Side-by-Side View](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/review_side_by_side_1782297606503.png)
+
+Here is the screen recording of the browser verification flow:
+
+![Docker Verification Session](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/docker_verification_1782297563342.webp)
+
+### Footnote Selection, Status & Reporting Updates
+We resolved issues around footnotes interaction and added a complete validation framework for footnote texts:
+1. **Interactive Text Selection & Annotation**: Enabled selecting text segments inside footnote cards to create popover annotations. These annotations are persisted to the database with a reference to the footnote (`footnote_id`).
+2. **Footnote Text Highlighting**: Text annotations on footnotes dynamically compile into yellow inline highlight marks (`<mark>` tag wrappers) rendered directly in the React footnote text container.
+3. **Approval and Flag Action Status Updates**: Fixed a Zustand store issue (`TypeError: docStore.setState is not a function`) by correctly invoking the store's hook method (`useDocumentStore.setState`). Status updates now work correctly for both single-section reviews and page-level grouped section reviews.
+
+Here is the screenshot showing the verified, highlighted footnote annotation in the workspace:
+
+![Footnote Annotation Verified](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/footnote_annotation_verified_1782305448796.png)
+
+Here is the screen recording demonstrating footnote status toggles and text highlight annotation reporting:
+
+![Footnote Verification Recording](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/footnote_fixes_verify_1782305145806.webp)
+
+### Global Issues & Resolution Workflow
+We added support for document-level mismatch auditing and status resolution tracking:
+1. **Document-wide Issues tab**: The "Issues" tab in the left sidebar aggregates all reported annotations (at both the section body and footnote card levels) for the active document.
+2. **Open / Resolved sub-tabs**: The list features two sub-tabs displaying **Open** issues (still active) and **Resolved** issues (marked as resolved).
+3. **Resolving Issues (Checkboxes)**: Tapping the checkbox next to any issue card toggles its state between open and resolved. Resolving an issue dynamically shifts the card to the resolved list and removes the yellow highlight overlays from the main visual panes (HTML and footnote text) to reduce visual clutter.
+4. **Redirection on Click**: Clicking any issue card in the global list triggers a redirect that jumps the PDF viewer and HTML panels directly to the corresponding section.
+
+Here is the screenshot showing the global Issues tab with open annotations and status counts:
+
+![Global Issues Workspace](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/reopened_issue_1782307889637.png)
+
+Here is the screen recording demonstrating the global issues checklist, resolving a mismatch, and navigating back and forth:
+
+![Global Issues Verification Recording](/Users/muhammad.husnain/.gemini/antigravity-ide/brain/35fd6d3e-3083-46fe-8f44-61249f3d5dd4/global_issues_verify_1782307113271.webp)
+
 ---
+
 
 ## 4. How to Run the Portal
 
-### Prerequisites
+### Option A: Running with Docker Compose (Recommended)
+This method containerizes the entire stack, linking the frontend and backend services automatically. Ensure Docker Desktop is installed and running on your host machine.
+
+From the project root directory, run:
+```bash
+# Build and start both services in the background
+docker compose up -d --build
+```
+- **Dashboard**: Access the portal in your browser at `http://localhost:5173/`
+- **Backend API Docs**: Access `http://localhost:8000/docs`
+- **Persistence**: Database state (`backend/data/`) and uploaded documents (`backend/uploads/`) map dynamically to the host machine for safety.
+
+To stop the containers:
+```bash
+docker compose down
+```
+
+---
+
+### Option B: Running Locally (Manual setup)
+
+#### Prerequisites
 - Python 3.10+
 - Node.js 18+
 
-### Step 1: Start Backend Server
+#### Step 1: Start Backend Server
 Ensure you are in the project root directory, then run:
 ```bash
 # Activate virtual environment
@@ -83,10 +154,11 @@ source backend/venv/bin/activate
 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-### Step 2: Start Frontend Dev Server
+#### Step 2: Start Frontend Dev Server
 In a separate terminal tab, run:
 ```bash
 cd frontend
 npm run dev -- --host 127.0.0.1
 ```
 The Vite dev server will run at `http://127.0.0.1:5173/`. Open it in any browser to start validation!
+

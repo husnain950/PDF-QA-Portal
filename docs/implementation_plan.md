@@ -1,137 +1,76 @@
-# PDF-QA Validation Portal — Implementation Plan
+# Implementation Plan — Global Document Issues and Resolution Workflow
 
-This document outlines the step-by-step implementation strategy for the PDF-QA Validation Portal, based on the approved design document.
-
-The goal is to build a high-performance, rich aesthetic web portal for validating PDF-to-HTML parsing. Reviewers can upload PDF and JSON pairs, navigate side-by-side (section-by-section and page-by-page), highlight discrepancies, annotate issues, and track their review progress.
-
-## User Review Required
-
-> [!IMPORTANT]
-> The database will be a local SQLite database file, stored under the `backend/data/` directory. All uploads (PDFs and JSONs) will reside in the `backend/uploads/` directory.
-> No login or user management is implemented (as per design), but a simple "reviewer name" input/cookie will be used to identify who flagged issues.
-
-## Open Questions
-
-- Should we implement automated mapping suggestion or validation for footnotes (i.e. cross-referencing text markers in the HTML directly with the footnotes array on load, highlighting sections where footnotes exist but no marker is present in the HTML)?
-- Are there any specific PDF formatting constraints (like high-DPI scans vs vector text PDFs) we should optimize pdf.js rendering for?
+This plan details the implementation of a document-wide ("global") issue validation and resolution system.
 
 ---
 
 ## Proposed Changes
 
-### [Backend Component]
+### Database & Backend
 
-We will build a lightweight FastAPI server that acts as a REST API and static file host.
+We will extend the `annotations` table schema to track an issue's status ('open' or 'resolved') and provide a document-wide retrieval endpoint.
 
-#### [NEW] [main.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/main.py)
-Entry point of the FastAPI application. Sets up CORS middleware, includes the routes, and configures static file serving for the `/uploads` directory.
+#### [MODIFY] [database.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/database.py)
+* Add `status TEXT NOT NULL DEFAULT 'open'` to the `annotations` table creation statement.
+* Add an automatic startup migration check that runs `ALTER TABLE annotations ADD COLUMN status TEXT NOT NULL DEFAULT 'open';` if the column doesn't exist.
 
-#### [NEW] [database.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/database.py)
-Handles SQLite database connection, table initialization (documents, sections, footnotes, annotations), and creates the FTS5 virtual table for full-text search.
+#### [MODIFY] [models.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/models.py)
+* Add `status: str = "open"` to `AnnotationBase` and `AnnotationResponse`.
+* Add `status: Optional[str] = None` to `AnnotationUpdate`.
 
-#### [NEW] [models.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/models.py)
-Pydantic schemas for request validation and response models (Document, Section, Footnote, Annotation, Search results, etc.).
-
-#### [NEW] [json_parser.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/services/json_parser.py)
-Service to parse the uploaded enriched JSON, extract chapters, parts, divisions, and sections, and flatten them into database-ready rows.
-
-#### [NEW] [pdf_service.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/services/pdf_service.py)
-Service utilizing `pypdf` (or similar python package) to extract basic metadata from uploaded PDF files (such as page counts) to populate database records.
-
-#### [NEW] [documents.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/documents.py)
-API endpoints for uploading a document pair, listing all documents with their progress statistics, retrieving a single document, and deleting a document.
-
-#### [NEW] [sections.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/sections.py)
-API endpoints for getting document sections (TOC list), getting a single section (with HTML content), getting sections by page number, and updating section review status.
-
-#### [NEW] [annotations.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/annotations.py)
-API endpoints for listing annotations, creating a new inline highlight annotation, updating an annotation, and deleting an annotation.
-
-#### [NEW] [footnotes.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/footnotes.py)
-API endpoints for updating footnote review status (`approved`, `has_issues`, `pending`).
-
-#### [NEW] [search.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/search.py)
-API endpoint to search the flat list of sections using SQLite FTS5 index.
-
-#### [NEW] [export.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/export.py)
-API endpoints to compile and export the document's QA report as a downloadable JSON or CSV file.
-
-#### [NEW] [requirements.txt](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/requirements.txt)
-Python package dependencies: `fastapi`, `uvicorn`, `aiosqlite`, `python-multipart`, `pypdf`.
+#### [MODIFY] [annotations.py](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/backend/routes/annotations.py)
+* **New Route**: Add `GET /documents/{document_id}/annotations` which returns a flat list of all annotations belonging to a document (by joining `annotations` with `sections`).
+* **Route Update**: Update `PATCH /annotations/{annotation_id}` to handle the `status` update:
+  - If status becomes `resolved`:
+    - Check if there are any remaining `open` annotations (section or footnote level) for that section. If no open annotations remain, change the section status from `has_issues` back to `pending`.
+  - If status becomes `open` (unresolved):
+    - Ensure the parent section status is updated to `has_issues`.
 
 ---
 
-### [Frontend Component]
+### Frontend Zustand Store
 
-We will build a React Single Page Application (SPA) powered by Vite.
+We will track all document-level annotations globally in Zustand so that changes in the sidebar sync immediately.
 
-#### [NEW] [package.json](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/package.json)
-Frontend configuration containing React, Lucide Icons, Zustand (state management), and development/build scripts.
+#### [MODIFY] [reviewStore.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/stores/reviewStore.js)
+* Introduce a state array `globalAnnotations: []`.
+* Add `fetchGlobalAnnotations: async (documentId)` to query the new backend endpoint.
+* Add `toggleAnnotationStatus: async (annotationId, currentStatus)` to toggle between `'open'` and `'resolved'`, updating the local active `annotations` state, `globalAnnotations` state, and the section review status.
+* Update `createAnnotation` and `deleteAnnotation` to append/remove annotations from `globalAnnotations` dynamically.
 
-#### [NEW] [index.html](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/index.html)
-Main HTML page containing font preconnect elements (Inter font) and the root container div.
+---
 
-#### [NEW] [vite.config.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/vite.config.js)
-Vite configuration containing standard React plugin and configurations.
+### UI Panels
 
-#### [NEW] [index.css](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/index.css)
-Core styles, typography settings, utility classes, and light/dark theme variables.
+We will create a clean "Open vs. Resolved" interface tab in the sidebar.
 
-#### [NEW] [uiStore.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/stores/uiStore.js)
-Zustand store tracking UI state such as theme, sidebar open/close, active tab, split ratios, and PDF zoom levels.
+#### [MODIFY] [Sidebar.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/layout/Sidebar.jsx)
+* Automatically trigger `fetchGlobalAnnotations` on load.
+* Modify the "Issues" tab name to show the count of **open** issues across the entire document.
+* Add a sub-tab bar inside the Issues tab: **Open ({openCount})** and **Resolved ({resolvedCount})**.
+* Display global issue cards. Each card will show:
+  - The section header/footnote marker it belongs to (e.g. "Section 4" or "Section 4 · Footnote 1").
+  - The highlighted mismatch text and its description.
+  - A checkbox/tick action to resolve/unresolve the issue.
+  - An onClick action to transition the workspace directly to the target section.
 
-#### [NEW] [documentStore.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/stores/documentStore.js)
-Zustand store for managing loaded documents, sections, active section details, search status, and backend fetch calls.
+#### [MODIFY] [HtmlPanel.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/review/HtmlPanel.jsx)
+* Skip drawing highlights for resolved annotations (`if (annot.status === 'resolved') return`).
 
-#### [NEW] [reviewStore.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/stores/reviewStore.js)
-Zustand store tracking annotations, text selections, active PDF page, and view mode (Section vs Page view).
-
-#### [NEW] [UploadPage.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/pages/UploadPage.jsx)
-Upload interface with drag-and-drop support for PDF and JSON files, pre-upload validation display, and progress tracking.
-
-#### [NEW] [DashboardPage.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/pages/DashboardPage.jsx)
-Landing dashboard with document cards, progress rings, overall stats grid, and export shortcuts.
-
-#### [NEW] [ReviewPage.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/pages/ReviewPage.jsx)
-The three-column review layout integrating PDF rendering on the left, parsed HTML on the right, and the TOC navigation sidebar.
-
-#### [NEW] [usePdfRenderer.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/hooks/usePdfRenderer.js)
-Custom hook encapsulating `pdf.js` worker setup, page retrieval, scale calculation, and viewport canvas rendering.
-
-#### [NEW] [useTextSelection.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/hooks/useTextSelection.js)
-Custom hook to monitor mouse selections in the HTML panel and calculate relative start/end text offsets.
-
-#### [NEW] [AppShell.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/layout/AppShell.jsx)
-Page container providing the top navigation bar and collapsible sidebar.
-
-#### [NEW] [SplitPane.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/review/SplitPane.jsx)
-Resizable panel wrapper allowing smooth drag resize between the PDF and HTML sections.
-
-#### [NEW] [PdfPanel.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/review/PdfPanel.jsx)
-Houses the pdf.js rendering canvas, zoom control buttons, and canvas page-flip actions.
-
-#### [NEW] [HtmlPanel.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/review/HtmlPanel.jsx)
-Displays parsing HTML with selection event listeners, highlighting markers, and the footnotes panel.
-
-#### [NEW] [AnnotationPopover.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/annotations/AnnotationPopover.jsx)
-Floating widget to submit feedback (issue description, severity, reviewer name) near the highlighted text.
-
-#### [NEW] [FootnotePanel.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/footnotes/FootnotePanel.jsx)
-Displays list of section-associated footnotes, allowing reviewer validation.
-
-#### [NEW] [api.js](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/utils/api.js)
-Axios/fetch client wrapper with interceptors and helper methods.
+#### [MODIFY] [FootnotePanel.jsx](file:///Users/muhammad.husnain/Downloads/code/AG/PDF-QA-Portal/frontend/src/components/footnotes/FootnotePanel.jsx)
+* Skip drawing highlights inside footnote texts for resolved annotations.
 
 ---
 
 ## Verification Plan
 
-### Automated Tests
-- Backend endpoint unit tests using `pytest` and FastAPI's `TestClient`.
-- Frontend component rendering validation.
+### Automated Checks
+* Verify backend builds and runs successfully.
+* Verify SQLite database schema updates automatically on startup.
 
 ### Manual Verification
-- Upload sample ordinance files: `Income Tax Ordinance, 2001 Amended upto 30-06-2018.pdf` and `ordinance-2018-enriched.json`.
-- Test the zoom, page navigation, and view switching.
-- Perform annotations on HTML text, delete them, and toggle themes.
-- Export results to CSV/JSON and verify document structure.
+1. Open the web portal.
+2. Select text in a section, save it as an issue, and verify it appears in the **Global Issues -> Open** tab in the sidebar.
+3. Toggle the checkmark next to the issue. Verify it immediately transitions to the **Resolved** tab.
+4. Verify the yellow text highlight in the HTML pane vanishes when the issue is marked resolved, and reappears if marked unresolved.
+5. Verify clicking the issue card in the sidebar automatically jumps the PDF and HTML panel view to that specific section.
