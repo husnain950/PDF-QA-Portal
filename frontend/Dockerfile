@@ -3,12 +3,12 @@ FROM node:20-alpine
 WORKDIR /app
 
 # Copy package lock and package json for cache leverage
-COPY package*.json ./
+COPY frontend/package*.json ./
 
 RUN npm install
 
 # Copy frontend source code
-COPY . .
+COPY frontend .
 
 # Expose Vite development server port
 EXPOSE 5173

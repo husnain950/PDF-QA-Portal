@@ -8,11 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first to leverage caching
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy backend source code into /app/backend to match python module path
-COPY . ./backend
+COPY backend ./backend
 
 # Make sure volumes directories exist in the container
 RUN mkdir -p /app/backend/data /app/backend/uploads
