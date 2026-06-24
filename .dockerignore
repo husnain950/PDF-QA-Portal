@@ -1,0 +1,9 @@
+**/node_modules
+**/venv
+**/__pycache__
+**/.git
+**/.DS_Store
+**/.gemini
+backend/data/*.db
+backend/uploads/*
+frontend/dist

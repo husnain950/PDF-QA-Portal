@@ -1,0 +1,28 @@
+# Node.js
+**/node_modules/
+**/dist/
+frontend/dist
+
+# Python
+**/venv/
+**/*.pyc
+**/__pycache__/
+
+# SQLite Database
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/*.db-wal
+
+# PDF/JSON uploads (QA documents)
+backend/uploads/*
+!backend/uploads/.gitkeep
+!backend/data/.gitkeep
+
+# System files
+.DS_Store
+.DS_Store?
+**/Thumbs.db
+
+# Agent specific config/logs
+.gemini/
+.agents/
