@@ -104,8 +104,17 @@ const Sidebar = ({ documentId }) => {
                     className={`toc-node level-section ${isActive ? 'active' : ''}`}
                     onClick={() => handleSectionClick(sec.id, sec.start_page)}
                 >
-                    <span className={`toc-node-status ${sec.review_status}`} />
+                    <span className="toc-node-status-container">
+                        {sec.review_status === 'approved' ? (
+                            <span className="toc-status-emoji">✅</span>
+                        ) : sec.review_status === 'has_issues' ? (
+                            <span className="toc-status-emoji">❌</span>
+                        ) : (
+                            <span className={`toc-node-status ${sec.review_status || 'pending'}`} />
+                        )}
+                    </span>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+
                         Section {sec.section_code}: {sec.section_heading}
                     </span>
                     {sec.annotation_count > 0 && (

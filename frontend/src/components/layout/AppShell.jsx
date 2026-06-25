@@ -36,7 +36,7 @@ const AppShell = ({
                             {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
                         </button>
                     )}
-                    <div className="brand">
+                    <div className="brand" onClick={() => navigate('/')}>
                         <BookOpen size={22} strokeWidth={2.5} />
                         <span>PDF-QA Portal</span>
                     </div>

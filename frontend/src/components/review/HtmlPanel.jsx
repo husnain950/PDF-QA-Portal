@@ -3,12 +3,15 @@ import { useTextSelection } from '../../hooks/useTextSelection';
 import { useReviewStore } from '../../stores/reviewStore';
 import AnnotationPopover from '../annotations/AnnotationPopover';
 import FootnotePanel from '../footnotes/FootnotePanel';
+import { Copy, Check, Code, Eye } from 'lucide-react';
 
 const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
     const containerRef = useRef(null);
     const { annotations, createAnnotation, fetchAnnotations } = useReviewStore();
     const [popoverCoords, setPopoverCoords] = useState(null);
     const [selectionData, setSelectionData] = useState(null);
+    const [showRaw, setShowRaw] = useState(false);
+    const [copied, setCopied] = useState(false);
 
     // Fetch annotations whenever section changes
     useEffect(() => {
@@ -19,6 +22,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
 
     // Listen to text selections
     const { clearSelection } = useTextSelection(containerRef, (data) => {
+        if (showRaw) return; // Disable annotations/selection logic in raw mode
         setSelectionData(data);
         setPopoverCoords(data.coords);
     });
@@ -95,23 +99,122 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         setPopoverCoords(coords);
     };
 
+    const handleCopyHtml = () => {
+        if (!htmlContent) return;
+        
+        const copyToClipboard = async (text) => {
+            // 1. Try modern Clipboard API first
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return; // Successfully copied
+                } catch (err) {
+                    console.warn('Modern clipboard API failed, trying fallback method...', err);
+                }
+            }
+            
+            // 2. Fallback using a temporary textarea
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'absolute';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            textarea.setAttribute('readonly', ''); // Prevent visual keyboard on mobile
+            document.body.appendChild(textarea);
+            
+            const activeEl = document.activeElement;
+            textarea.select();
+            textarea.setSelectionRange(0, 99999); // Safe selection range for iOS
+            
+            try {
+                const successful = document.execCommand('copy');
+                if (!successful) {
+                    throw new Error('execCommand returned false');
+                }
+            } catch (err) {
+                console.error('Fallback copy method failed:', err);
+                // 3. Last resort fallback: ask user to copy manually via prompt
+                window.prompt("Copy HTML (Ctrl+C / Cmd+C):", text);
+            } finally {
+                document.body.removeChild(textarea);
+                if (activeEl && typeof activeEl.focus === 'function') {
+                    activeEl.focus();
+                }
+            }
+        };
+
+        copyToClipboard(htmlContent)
+            .then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+            })
+            .catch((err) => {
+                console.error('All copy methods failed: ', err);
+            });
+    };
+
     return (
         <div className="flex flex-col height-100" style={{ height: '100%' }} onClick={handleCancelAnnotation}>
-            <div className="panel-header glass-panel">
-                <span className="panel-title">Parsed HTML Content</span>
-                <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-                    Highlight text in this pane to report discrepancies
-                </span>
+            <div className="panel-header glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
+                <div className="flex flex-col">
+                    <span className="panel-title">Parsed HTML Content</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
+                        {showRaw ? 'Viewing raw HTML markup code' : 'Highlight text in this pane to report discrepancies'}
+                    </span>
+                </div>
+                <div className="flex align-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <button 
+                        className={`btn ${showRaw ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                        onClick={() => setShowRaw(!showRaw)}
+                        title={showRaw ? "Switch to Rendered HTML View" : "Switch to Raw HTML Code View"}
+                    >
+                        {showRaw ? <Eye size={14} /> : <Code size={14} />}
+                        <span>{showRaw ? 'Rendered' : 'Raw HTML'}</span>
+                    </button>
+                    <button 
+                        className="btn btn-secondary"
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                        onClick={handleCopyHtml}
+                        title="Copy raw HTML to clipboard"
+                    >
+                        {copied ? <Check size={14} style={{ color: 'var(--color-success)' }} /> : <Copy size={14} />}
+                        <span>{copied ? 'Copied!' : 'Copy HTML'}</span>
+                    </button>
+                </div>
             </div>
 
             <div className="panel-body" style={{ position: 'relative' }}>
                 <div 
                     ref={containerRef} 
                     className="html-renderer-container"
+                    style={{ display: showRaw ? 'none' : 'block' }}
                     onClick={(e) => e.stopPropagation()} // Stop bubble up to prevent clearing selection
                 />
 
-                {popoverCoords && selectionData && (
+                {showRaw && (
+                    <div className="html-renderer-container raw-mode" style={{ padding: 24 }}>
+                        <pre style={{ 
+                            margin: 0, 
+                            padding: 16, 
+                            backgroundColor: 'var(--color-bg-primary)', 
+                            border: '1px solid var(--color-border)', 
+                            borderRadius: 'var(--radius-md)', 
+                            whiteSpace: 'pre-wrap', 
+                            wordBreak: 'break-all', 
+                            fontFamily: 'monospace', 
+                            fontSize: '0.8rem', 
+                            color: 'var(--color-text-primary)',
+                            overflowX: 'auto',
+                            lineHeight: 1.5,
+                            userSelect: 'text'
+                        }}>
+                            {htmlContent}
+                        </pre>
+                    </div>
+                )}
+
+                {popoverCoords && selectionData && !showRaw && (
                     <AnnotationPopover 
                         selectionText={selectionData.text}
                         coords={popoverCoords}
@@ -120,13 +223,15 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                     />
                 )}
 
-                <div onClick={(e) => e.stopPropagation()}>
-                    <FootnotePanel 
-                        footnotes={footnotes} 
-                        annotations={annotations}
-                        onFootnoteSelect={handleFootnoteSelect}
-                    />
-                </div>
+                {!showRaw && (
+                    <div onClick={(e) => e.stopPropagation()}>
+                        <FootnotePanel 
+                            footnotes={footnotes} 
+                            annotations={annotations}
+                            onFootnoteSelect={handleFootnoteSelect}
+                        />
+                    </div>
+                )}
             </div>
         </div>
     );

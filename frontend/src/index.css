@@ -314,7 +314,14 @@ input, button, select, textarea {
     display: flex;
     align-items: center;
     gap: 8px;
+    cursor: pointer;
+    transition: opacity var(--transition-fast);
 }
+
+.brand:hover {
+    opacity: 0.85;
+}
+
 
 .workspace-container {
     display: flex;
@@ -748,6 +755,23 @@ input, button, select, textarea {
     color: var(--color-text-primary);
 }
 
+.toc-node-status-container {
+    width: 16px;
+    height: 16px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.toc-status-emoji {
+    font-size: 0.8rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .toc-node-status {
     width: 8px;
     height: 8px;
@@ -757,6 +781,7 @@ input, button, select, textarea {
 .toc-node-status.pending { background-color: var(--color-text-muted); }
 .toc-node-status.approved { background-color: var(--color-success); }
 .toc-node-status.has_issues { background-color: var(--color-error); }
+
 
 /* --- Search UI --- */
 .search-container {
