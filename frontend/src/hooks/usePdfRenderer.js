@@ -48,10 +48,15 @@ export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
         return () => {
             isCancelled = true;
             if (pdfDocRef.current) {
-                pdfDocRef.current.destroy();
+                if (typeof pdfDocRef.current.destroy === 'function') {
+                    pdfDocRef.current.destroy();
+                } else if (typeof pdfDocRef.current.cleanup === 'function') {
+                    pdfDocRef.current.cleanup();
+                }
                 pdfDocRef.current = null;
             }
         };
+
     }, [pdfUrl]);
 
     // Render Page
