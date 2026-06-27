@@ -133,7 +133,7 @@ const UploadPage = () => {
     };
 
     return (
-        <AppShell title="Upload Document Pair" showBackButton={true}>
+        <AppShell title="Upload Document Pair" showBackButton={true} scrollable={true}>
             <div className="upload-container glass-panel" style={{ padding: 40, marginTop: 40, border: '1px solid var(--color-border)' }}>
                 <h2 style={{ marginBottom: 24, fontSize: '1.5rem', fontFamily: 'var(--font-heading)' }}>
                     Upload QA Review Pair

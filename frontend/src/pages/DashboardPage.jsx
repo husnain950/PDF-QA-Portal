@@ -43,6 +43,7 @@ const DashboardPage = () => {
     return (
         <AppShell 
             title="Review Dashboard"
+            scrollable={true}
             actions={
                 <button className="btn btn-primary" onClick={() => navigate('/upload')}>
                     <UploadCloud size={16} />

@@ -8,7 +8,8 @@ const AppShell = ({
     title, 
     showBackButton = false, 
     sidebarContent = null, 
-    actions = null 
+    actions = null,
+    scrollable = false
 }) => {
     const navigate = useNavigate();
     const { theme, toggleTheme, sidebarOpen, toggleSidebar } = useUiStore();
@@ -66,7 +67,7 @@ const AppShell = ({
                         {sidebarContent}
                     </aside>
                 )}
-                <main className="main-content">
+                <main className={`main-content ${scrollable ? 'scrollable' : ''}`}>
                     {children}
                 </main>
             </div>
