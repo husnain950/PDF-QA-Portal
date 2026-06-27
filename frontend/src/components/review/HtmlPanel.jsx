@@ -5,13 +5,15 @@ import AnnotationPopover from '../annotations/AnnotationPopover';
 import FootnotePanel from '../footnotes/FootnotePanel';
 import { Copy, Check, Code, Eye } from 'lucide-react';
 
-const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
+const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
     const containerRef = useRef(null);
     const { annotations, createAnnotation, fetchAnnotations } = useReviewStore();
     const [popoverCoords, setPopoverCoords] = useState(null);
     const [selectionData, setSelectionData] = useState(null);
-    const [showRaw, setShowRaw] = useState(false);
+    const [paneMode, setPaneMode] = useState('rendered'); // 'rendered', 'html', 'json'
     const [copied, setCopied] = useState(false);
+    const [hoverFootnote, setHoverFootnote] = useState(null);
+    const [clickFootnote, setClickFootnote] = useState(null);
 
     // Fetch annotations whenever section changes
     useEffect(() => {
@@ -22,18 +24,68 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
 
     // Listen to text selections
     const { clearSelection } = useTextSelection(containerRef, (data) => {
-        if (showRaw) return; // Disable annotations/selection logic in raw mode
+        if (paneMode !== 'rendered') return; // Disable annotations/selection logic in raw/json modes
         setSelectionData(data);
         setPopoverCoords(data.coords);
     });
 
-    // Inject highlighting marks into rendered DOM
+    // Inject highlighting marks into rendered DOM & Bind Tooltip Listeners
     useEffect(() => {
         const container = containerRef.current;
         if (!container || !htmlContent) return;
 
         // Reset DOM to clean state
         container.innerHTML = htmlContent;
+
+        // Attach Instant Hover & Click Popups to Cite nodes
+        const cites = container.querySelectorAll('.cite');
+        cites.forEach((cite) => {
+            const titleText = cite.getAttribute('title');
+            if (titleText) {
+                cite.setAttribute('data-footnote-text', titleText);
+                cite.removeAttribute('title'); // Disable default slow native browser tooltip
+            }
+            
+            const handleMouseEnter = (e) => {
+                const text = cite.getAttribute('data-footnote-text') || '';
+                const rect = cite.getBoundingClientRect();
+                const containerRect = container.getBoundingClientRect();
+                
+                setHoverFootnote({
+                    text,
+                    marker: cite.textContent,
+                    coords: {
+                        top: rect.top - containerRect.top - 8,
+                        left: rect.left - containerRect.left + (rect.width / 2)
+                    }
+                });
+            };
+
+            const handleMouseLeave = () => {
+                setHoverFootnote(null);
+            };
+
+            const handleClick = (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const text = cite.getAttribute('data-footnote-text') || '';
+                const rect = cite.getBoundingClientRect();
+                const containerRect = container.getBoundingClientRect();
+                
+                setClickFootnote({
+                    text,
+                    marker: cite.textContent,
+                    coords: {
+                        top: rect.bottom - containerRect.top + 8,
+                        left: rect.left - containerRect.left + (rect.width / 2)
+                    }
+                });
+            };
+
+            cite.addEventListener('mouseenter', handleMouseEnter);
+            cite.addEventListener('mouseleave', handleMouseLeave);
+            cite.addEventListener('click', handleClick);
+        });
 
         if (!annotations || annotations.length === 0) return;
 
@@ -65,6 +117,35 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         });
     }, [htmlContent, annotations]);
 
+    // Close click footnote popup on ESC key or clicking outside
+    useEffect(() => {
+        if (!clickFootnote) return;
+
+        const handleKeyDown = (e) => {
+            if (e.key === 'Escape') {
+                setClickFootnote(null);
+            }
+        };
+
+        const handleDocumentClick = (e) => {
+            const popupElement = document.getElementById('footnote-click-popup');
+            if (popupElement && !popupElement.contains(e.target)) {
+                setClickFootnote(null);
+            }
+        };
+
+        document.addEventListener('keydown', handleKeyDown);
+        const timeoutId = setTimeout(() => {
+            document.addEventListener('click', handleDocumentClick);
+        }, 0);
+
+        return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            clearTimeout(timeoutId);
+            document.removeEventListener('click', handleDocumentClick);
+        };
+    }, [clickFootnote]);
+
     const handleSaveAnnotation = async (data) => {
         if (!sectionId || !selectionData) return;
         try {
@@ -87,6 +168,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         clearSelection();
         setPopoverCoords(null);
         setSelectionData(null);
+        setClickFootnote(null);
     };
 
     const handleFootnoteSelect = (footnoteId, text, start, end, coords) => {
@@ -99,8 +181,15 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         setPopoverCoords(coords);
     };
 
-    const handleCopyHtml = () => {
-        if (!htmlContent) return;
+    const handleCopyContent = () => {
+        let textToCopy = '';
+        if (paneMode === 'json') {
+            const sectionData = section || { id: sectionId, html_content: htmlContent, footnotes };
+            textToCopy = JSON.stringify(sectionData, null, 2);
+        } else {
+            textToCopy = htmlContent;
+        }
+        if (!textToCopy) return;
         
         const copyToClipboard = async (text) => {
             // 1. Try modern Clipboard API first
@@ -134,7 +223,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
             } catch (err) {
                 console.error('Fallback copy method failed:', err);
                 // 3. Last resort fallback: ask user to copy manually via prompt
-                window.prompt("Copy HTML (Ctrl+C / Cmd+C):", text);
+                window.prompt("Copy Content (Ctrl+C / Cmd+C):", text);
             } finally {
                 document.body.removeChild(textarea);
                 if (activeEl && typeof activeEl.focus === 'function') {
@@ -143,7 +232,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
             }
         };
 
-        copyToClipboard(htmlContent)
+        copyToClipboard(textToCopy)
             .then(() => {
                 setCopied(true);
                 setTimeout(() => setCopied(false), 2000);
@@ -157,29 +246,51 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
         <div className="flex flex-col height-100" style={{ height: '100%' }} onClick={handleCancelAnnotation}>
             <div className="panel-header glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', boxSizing: 'border-box' }}>
                 <div className="flex flex-col">
-                    <span className="panel-title">Parsed HTML Content</span>
+                    <span className="panel-title">
+                        {paneMode === 'rendered' && 'Parsed HTML Content'}
+                        {paneMode === 'html' && 'Raw HTML Markup'}
+                        {paneMode === 'json' && 'Raw Section JSON'}
+                    </span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-                        {showRaw ? 'Viewing raw HTML markup code' : 'Highlight text in this pane to report discrepancies'}
+                        {paneMode === 'rendered' ? 'Highlight text in this pane to report discrepancies' : paneMode === 'html' ? 'Viewing raw HTML markup code' : 'Viewing raw JSON data for this section'}
                     </span>
                 </div>
                 <div className="flex align-center gap-2" onClick={(e) => e.stopPropagation()}>
                     <button 
-                        className={`btn ${showRaw ? 'btn-primary' : 'btn-secondary'}`}
+                        className={`btn ${paneMode === 'rendered' ? 'btn-primary' : 'btn-secondary'}`}
                         style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-                        onClick={() => setShowRaw(!showRaw)}
-                        title={showRaw ? "Switch to Rendered HTML View" : "Switch to Raw HTML Code View"}
+                        onClick={() => setPaneMode('rendered')}
+                        title="Switch to Rendered HTML View"
                     >
-                        {showRaw ? <Eye size={14} /> : <Code size={14} />}
-                        <span>{showRaw ? 'Rendered' : 'Raw HTML'}</span>
+                        <Eye size={14} />
+                        <span>Rendered</span>
+                    </button>
+                    <button 
+                        className={`btn ${paneMode === 'html' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                        onClick={() => setPaneMode('html')}
+                        title="Switch to Raw HTML Code View"
+                    >
+                        <Code size={14} />
+                        <span>Raw HTML</span>
+                    </button>
+                    <button 
+                        className={`btn ${paneMode === 'json' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                        onClick={() => setPaneMode('json')}
+                        title="Switch to Raw JSON View"
+                    >
+                        <Code size={14} />
+                        <span>Raw JSON</span>
                     </button>
                     <button 
                         className="btn btn-secondary"
                         style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
-                        onClick={handleCopyHtml}
-                        title="Copy raw HTML to clipboard"
+                        onClick={handleCopyContent}
+                        title={paneMode === 'json' ? "Copy raw JSON to clipboard" : "Copy raw HTML to clipboard"}
                     >
                         {copied ? <Check size={14} style={{ color: 'var(--color-success)' }} /> : <Copy size={14} />}
-                        <span>{copied ? 'Copied!' : 'Copy HTML'}</span>
+                        <span>{copied ? 'Copied!' : paneMode === 'json' ? 'Copy JSON' : 'Copy HTML'}</span>
                     </button>
                 </div>
             </div>
@@ -188,11 +299,11 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                 <div 
                     ref={containerRef} 
                     className="html-renderer-container"
-                    style={{ display: showRaw ? 'none' : 'block' }}
+                    style={{ display: paneMode === 'rendered' ? 'block' : 'none' }}
                     onClick={(e) => e.stopPropagation()} // Stop bubble up to prevent clearing selection
                 />
 
-                {showRaw && (
+                {paneMode === 'html' && (
                     <div className="html-renderer-container raw-mode" style={{ padding: 24 }}>
                         <pre style={{ 
                             margin: 0, 
@@ -214,7 +325,29 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                     </div>
                 )}
 
-                {popoverCoords && selectionData && !showRaw && (
+                {paneMode === 'json' && (
+                    <div className="html-renderer-container raw-mode" style={{ padding: 24 }}>
+                        <pre style={{ 
+                            margin: 0, 
+                            padding: 16, 
+                            backgroundColor: 'var(--color-bg-primary)', 
+                            border: '1px solid var(--color-border)', 
+                            borderRadius: 'var(--radius-md)', 
+                            whiteSpace: 'pre-wrap', 
+                            wordBreak: 'break-all', 
+                            fontFamily: 'monospace', 
+                            fontSize: '0.8rem', 
+                            color: 'var(--color-text-primary)',
+                            overflowX: 'auto',
+                            lineHeight: 1.5,
+                            userSelect: 'text'
+                        }}>
+                            {JSON.stringify(section || { id: sectionId, html_content: htmlContent, footnotes }, null, 2)}
+                        </pre>
+                    </div>
+                )}
+
+                {popoverCoords && selectionData && paneMode === 'rendered' && (
                     <AnnotationPopover 
                         selectionText={selectionData.text}
                         coords={popoverCoords}
@@ -223,7 +356,79 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                     />
                 )}
 
-                {!showRaw && (
+                {hoverFootnote && paneMode === 'rendered' && (
+                    <div style={{
+                        position: 'absolute',
+                        top: hoverFootnote.coords.top,
+                        left: hoverFootnote.coords.left,
+                        transform: 'translate(-50%, -100%)',
+                        zIndex: 200,
+                        pointerEvents: 'none'
+                    }}>
+                        <div style={{
+                            backgroundColor: 'var(--color-bg-secondary)',
+                            border: '1px solid var(--color-border-strong)',
+                            borderRadius: 'var(--radius-sm)',
+                            padding: '8px 12px',
+                            boxShadow: 'var(--shadow-md)',
+                            fontSize: '0.8rem',
+                            color: 'var(--color-text-primary)',
+                            maxWidth: 280,
+                            animation: 'popFade 0.1s ease-out'
+                        }}>
+                            <div style={{ fontWeight: 800, color: 'var(--color-accent)', marginBottom: 2 }}>Footnote {hoverFootnote.marker}</div>
+                            <div>{hoverFootnote.text}</div>
+                        </div>
+                    </div>
+                )}
+
+                {clickFootnote && paneMode === 'rendered' && (
+                    <div 
+                        id="footnote-click-popup"
+                        style={{
+                            position: 'absolute',
+                            top: clickFootnote.coords.top,
+                            left: clickFootnote.coords.left,
+                            transform: 'translateX(-50%)',
+                            zIndex: 210
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div style={{
+                            backgroundColor: 'var(--color-bg-secondary)',
+                            border: '1px solid var(--color-border-strong)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: '16px',
+                            boxShadow: 'var(--shadow-lg)',
+                            fontSize: '0.85rem',
+                            color: 'var(--color-text-primary)',
+                            maxWidth: 320,
+                            animation: 'popFade 0.15s ease-out'
+                        }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 16 }}>
+                                <span style={{ fontWeight: 800, color: 'var(--color-accent)' }}>Footnote {clickFootnote.marker}</span>
+                                <button 
+                                    style={{
+                                        background: 'none',
+                                        border: 'none',
+                                        color: 'var(--color-text-muted)',
+                                        cursor: 'pointer',
+                                        fontSize: '1.2rem',
+                                        lineHeight: '1',
+                                        fontWeight: 'bold',
+                                        padding: '2px 6px'
+                                    }}
+                                    onClick={() => setClickFootnote(null)}
+                                >
+                                    &times;
+                                </button>
+                            </div>
+                            <div style={{ lineHeight: 1.5, color: 'var(--color-text-secondary)' }}>{clickFootnote.text}</div>
+                        </div>
+                    </div>
+                )}
+
+                {paneMode === 'rendered' && (
                     <div onClick={(e) => e.stopPropagation()}>
                         <FootnotePanel 
                             footnotes={footnotes} 
@@ -233,6 +438,7 @@ const HtmlPanel = ({ sectionId, htmlContent, footnotes }) => {
                     </div>
                 )}
             </div>
+
         </div>
     );
 };

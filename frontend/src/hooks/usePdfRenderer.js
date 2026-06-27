@@ -4,18 +4,17 @@ import * as pdfjsLib from 'pdfjs-dist';
 // Set up worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 
-export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
+// Hook to load the PDF document once
+export const usePdfDocument = (pdfUrl) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [numPages, setNumPages] = useState(0);
-    const pdfDocRef = useRef(null);
-    const renderTaskRef = useRef(null);
+    const [pdfDoc, setPdfDoc] = useState(null);
 
-    // Load PDF Document
     useEffect(() => {
         if (!pdfUrl) {
             setNumPages(0);
-            pdfDocRef.current = null;
+            setPdfDoc(null);
             return;
         }
 
@@ -28,7 +27,7 @@ export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
                 const loadingTask = pdfjsLib.getDocument({ url: pdfUrl });
                 const pdf = await loadingTask.promise;
                 if (!isCancelled) {
-                    pdfDocRef.current = pdf;
+                    setPdfDoc(pdf);
                     setNumPages(pdf.numPages);
                 }
             } catch (err) {
@@ -47,32 +46,41 @@ export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
 
         return () => {
             isCancelled = true;
-            if (pdfDocRef.current) {
-                if (typeof pdfDocRef.current.destroy === 'function') {
-                    pdfDocRef.current.destroy();
-                } else if (typeof pdfDocRef.current.cleanup === 'function') {
-                    pdfDocRef.current.cleanup();
+            if (pdfDoc) {
+                if (typeof pdfDoc.destroy === 'function') {
+                    pdfDoc.destroy();
+                } else if (typeof pdfDoc.cleanup === 'function') {
+                    pdfDoc.cleanup();
                 }
-                pdfDocRef.current = null;
             }
+            setPdfDoc(null);
         };
-
     }, [pdfUrl]);
 
-    // Render Page
+    return { pdfDoc, loading, error, numPages };
+};
+
+// Hook to render a single PDF page given a loaded pdfDoc object
+export const usePdfPageRenderer = (pdfDoc, pageNumber, zoom, canvasRef) => {
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    const renderTaskRef = useRef(null);
+
     useEffect(() => {
         const canvas = canvasRef.current;
-        if (!canvas || !pdfDocRef.current) return;
+        if (!canvas || !pdfDoc) return;
 
         let isCancelled = false;
 
         const renderPage = async () => {
+            setLoading(true);
+            setError(null);
             try {
                 if (renderTaskRef.current) {
                     renderTaskRef.current.cancel();
                 }
 
-                const page = await pdfDocRef.current.getPage(pageNumber);
+                const page = await pdfDoc.getPage(pageNumber);
                 if (isCancelled) return;
 
                 const viewport = page.getViewport({ scale: zoom });
@@ -93,6 +101,11 @@ export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
             } catch (err) {
                 if (err.name !== 'RenderingCancelledException' && !isCancelled) {
                     console.error('Error rendering page:', err);
+                    setError(err);
+                }
+            } finally {
+                if (!isCancelled) {
+                    setLoading(false);
                 }
             }
         };
@@ -105,7 +118,20 @@ export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
                 renderTaskRef.current.cancel();
             }
         };
-    }, [pageNumber, zoom, pdfDocRef.current, canvasRef]);
+    }, [pageNumber, zoom, pdfDoc, canvasRef]);
 
-    return { loading, error, numPages };
+    return { loading, error };
 };
+
+// Backward-compatible original hook
+export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
+    const { pdfDoc, loading: docLoading, error: docError, numPages } = usePdfDocument(pdfUrl);
+    const { loading: pageLoading, error: pageError } = usePdfPageRenderer(pdfDoc, pageNumber, zoom, canvasRef);
+
+    return {
+        loading: docLoading || pageLoading,
+        error: docError || pageError,
+        numPages
+    };
+};
+

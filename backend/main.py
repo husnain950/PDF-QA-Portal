@@ -9,6 +9,36 @@ from backend.routes import documents, sections, annotations, footnotes, search, 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Seed data logic if target files/directories are empty
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 1. Database seeding
+    db_dir = os.path.join(backend_dir, "data")
+    db_path = os.path.join(db_dir, "qa_portal.db")
+    seed_db_path = os.path.join(backend_dir, "seed_data", "qa_portal.db")
+    
+    os.makedirs(db_dir, exist_ok=True)
+    if not os.path.exists(db_path) and os.path.exists(seed_db_path):
+        print(f"Seeding database from {seed_db_path} to {db_path}...")
+        import shutil
+        shutil.copy(seed_db_path, db_path)
+        
+    # 2. Uploads seeding
+    upload_dir = os.path.join(backend_dir, "uploads")
+    seed_upload_dir = os.path.join(backend_dir, "seed_uploads")
+    
+    os.makedirs(upload_dir, exist_ok=True)
+    current_files = [f for f in os.listdir(upload_dir) if f != ".gitkeep"]
+    if len(current_files) == 0 and os.path.exists(seed_upload_dir):
+        print(f"Seeding uploads from {seed_upload_dir} to {upload_dir}...")
+        import shutil
+        for item in os.listdir(seed_upload_dir):
+            if item != ".gitkeep":
+                src = os.path.join(seed_upload_dir, item)
+                dst = os.path.join(upload_dir, item)
+                if os.path.isfile(src):
+                    shutil.copy(src, dst)
+
     # Initialize database on startup
     await init_db()
     yield

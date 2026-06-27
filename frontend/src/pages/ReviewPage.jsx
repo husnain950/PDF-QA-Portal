@@ -130,6 +130,7 @@ const ReviewPage = () => {
                 {viewMode === 'section' ? (
                     activeSection ? (
                         <HtmlPanel 
+                            section={activeSection}
                             sectionId={activeSection.id}
                             htmlContent={activeSection.html_content}
                             footnotes={activeSection.footnotes}
@@ -154,6 +155,7 @@ const ReviewPage = () => {
                                         </span>
                                     </div>
                                     <HtmlPanel 
+                                        section={sec}
                                         sectionId={sec.id}
                                         htmlContent={sec.html_content}
                                         footnotes={sec.footnotes}

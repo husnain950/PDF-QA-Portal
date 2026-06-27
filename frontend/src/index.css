@@ -355,6 +355,10 @@ input, button, select, textarea {
     overflow: hidden;
 }
 
+.main-content.scrollable {
+    overflow-y: auto;
+}
+
 /* --- Review Workspace Split Panel --- */
 .split-pane {
     display: flex;
@@ -508,6 +512,7 @@ input, button, select, textarea {
     margin-bottom: 0.5em;
     font-size: 0.95rem;
 }
+
 
 .html-renderer-container table {
     width: 100%;
