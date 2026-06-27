@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Search, FileText, AlertTriangle, Trash2, CheckCircle } from 'lucide-react';
 import { useUiStore } from '../../stores/uiStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useReviewStore } from '../../stores/reviewStore';
 
 const Sidebar = ({ documentId }) => {
+    const navigate = useNavigate();
     const { sidebarTab, setSidebarTab } = useUiStore();
     const { 
         sections, 
@@ -20,7 +22,9 @@ const Sidebar = ({ documentId }) => {
         fetchGlobalAnnotations, 
         toggleAnnotationStatus, 
         deleteAnnotation, 
-        setCurrentPage 
+        setCurrentPage,
+        viewMode,
+        setViewMode
     } = useReviewStore();
     
     const [localQuery, setLocalQuery] = useState('');
@@ -49,12 +53,11 @@ const Sidebar = ({ documentId }) => {
         return () => clearTimeout(delay);
     }, [localQuery, documentId, search, clearSearch]);
 
-    const handleSectionClick = async (secId, startPage) => {
-        const sec = await fetchSection(documentId, secId);
-        const targetPage = startPage || sec?.start_page;
-        if (sec && targetPage) {
-            setCurrentPage(targetPage);
+    const handleSectionClick = (secId) => {
+        if (viewMode === 'page') {
+            setViewMode('section');
         }
+        navigate(`/review/${documentId}/${secId}`);
     };
 
     // Construct TOC tree with headers

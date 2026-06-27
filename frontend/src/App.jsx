@@ -10,7 +10,7 @@ function App() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/upload" element={<UploadPage />} />
-        <Route path="/review/:documentId" element={<ReviewPage />} />
+        <Route path="/review/:documentId/:sectionId?" element={<ReviewPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

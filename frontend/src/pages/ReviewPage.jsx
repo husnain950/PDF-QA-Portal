@@ -15,7 +15,7 @@ import { useKeyboardNav } from '../hooks/useKeyboardNav';
 import { api } from '../utils/api';
 
 const ReviewPage = () => {
-    const { documentId } = useParams();
+    const { documentId, sectionId } = useParams();
     const navigate = useNavigate();
 
     const { 
@@ -79,21 +79,29 @@ const ReviewPage = () => {
         }
     }, [viewMode, currentPage, documentId, fetchSectionsByPage]);
 
-    // Resume Logic: Set first pending section as active once sections list loads
+    // Synchronize active section with URL sectionId
     useEffect(() => {
-        if (!initialLoad && sections.length > 0 && !activeSection && viewMode === 'section') {
-            // Find first pending section
+        if (initialLoad || sections.length === 0 || viewMode !== 'section') return;
+
+        if (sectionId) {
+            // If URL has sectionId and it's not the currently active one, fetch/set it
+            if (!activeSection || activeSection.id !== sectionId) {
+                const loadSection = async () => {
+                    const sec = await fetchSection(documentId, sectionId);
+                    if (sec && sec.start_page) {
+                        setCurrentPage(sec.start_page);
+                    }
+                };
+                loadSection();
+            }
+        } else {
+            // No sectionId in URL, redirect to the first pending section (or first section)
             const firstPending = sections.find(s => s.review_status === 'pending') || sections[0];
-            
-            const loadInitialSection = async () => {
-                const sec = await fetchSection(documentId, firstPending.id);
-                if (sec && sec.start_page) {
-                    setCurrentPage(sec.start_page);
-                }
-            };
-            loadInitialSection();
+            if (firstPending) {
+                navigate(`/review/${documentId}/${firstPending.id}`, { replace: true });
+            }
         }
-    }, [initialLoad, sections, activeSection, documentId, fetchSection, setCurrentPage, viewMode]);
+    }, [sectionId, initialLoad, sections, viewMode, activeSection, documentId, fetchSection, setCurrentPage, navigate]);
 
     if (initialLoad) {
         return (
@@ -185,14 +193,23 @@ const ReviewPage = () => {
                 <button
                     className={`btn ${viewMode === 'section' ? 'btn-primary' : 'btn-secondary'}`}
                     style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 0, border: 'none' }}
-                    onClick={() => setViewMode('section')}
+                    onClick={() => {
+                        setViewMode('section');
+                        const targetId = activeSection?.id || sections.find(s => s.review_status === 'pending')?.id || sections[0]?.id;
+                        if (targetId) {
+                            navigate(`/review/${documentId}/${targetId}`);
+                        }
+                    }}
                 >
                     Section View
                 </button>
                 <button
                     className={`btn ${viewMode === 'page' ? 'btn-primary' : 'btn-secondary'}`}
                     style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 0, border: 'none' }}
-                    onClick={() => setViewMode('page')}
+                    onClick={() => {
+                        setViewMode('page');
+                        navigate(`/review/${documentId}`);
+                    }}
                 >
                     Page View
                 </button>
