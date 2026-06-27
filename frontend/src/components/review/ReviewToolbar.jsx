@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, AlertTriangle, ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
+import { Check, AlertTriangle, ArrowLeft, ArrowRight, Loader2, Clock } from 'lucide-react';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useReviewStore } from '../../stores/reviewStore';
 
@@ -50,6 +50,14 @@ const ReviewToolbar = () => {
         }
     };
 
+    const handlePending = async () => {
+        try {
+            await updateSectionStatus(activeDocument.id, activeSection.id, 'pending');
+        } catch (e) {
+            alert('Failed to update status: ' + e.message);
+        }
+    };
+
     return (
         <div className="review-toolbar glass-panel" style={{ gap: 12, overflow: 'hidden', padding: '0 16px' }}>
             {/* Left side: Status Badge */}
@@ -73,6 +81,24 @@ const ReviewToolbar = () => {
 
             {/* Center: Actions */}
             <div className="flex align-center gap-2" style={{ justifyContent: 'center', flex: 1 }}>
+                <button
+                    className={`btn ${activeSection.review_status === 'pending' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ 
+                        padding: '6px 12px', 
+                        fontSize: '0.8rem',
+                        backgroundColor: activeSection.review_status === 'pending' ? 'var(--color-border)' : 'transparent',
+                        borderColor: 'var(--color-border)',
+                        color: activeSection.review_status === 'pending' ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                        whiteSpace: 'nowrap'
+                    }}
+                    onClick={handlePending}
+                    disabled={loading.activeSection}
+                    title="Mark Section as Pending"
+                >
+                    <Clock size={14} />
+                    <span>Pending</span>
+                </button>
+
                 <button
                     className={`btn ${activeSection.review_status === 'approved' ? 'btn-primary' : 'btn-secondary'}`}
                     style={{ 
