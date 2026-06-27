@@ -51,12 +51,22 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                 const rect = cite.getBoundingClientRect();
                 const containerRect = container.getBoundingClientRect();
                 
+                const centerOfMarker = rect.left - containerRect.left + (rect.width / 2);
+                const halfPopupWidth = 150; // 140px (half of max-width 280) + 10px safety margin
+                
+                let boundedLeft = centerOfMarker;
+                if (boundedLeft < halfPopupWidth) {
+                    boundedLeft = halfPopupWidth;
+                } else if (boundedLeft > containerRect.width - halfPopupWidth) {
+                    boundedLeft = Math.max(halfPopupWidth, containerRect.width - halfPopupWidth);
+                }
+                
                 setHoverFootnote({
                     text,
                     marker: cite.textContent,
                     coords: {
                         top: rect.top - containerRect.top - 8,
-                        left: rect.left - containerRect.left + (rect.width / 2)
+                        left: boundedLeft
                     }
                 });
             };
@@ -72,12 +82,22 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                 const rect = cite.getBoundingClientRect();
                 const containerRect = container.getBoundingClientRect();
                 
+                const centerOfMarker = rect.left - containerRect.left + (rect.width / 2);
+                const halfPopupWidth = 170; // 160px (half of max-width 320) + 10px safety margin
+                
+                let boundedLeft = centerOfMarker;
+                if (boundedLeft < halfPopupWidth) {
+                    boundedLeft = halfPopupWidth;
+                } else if (boundedLeft > containerRect.width - halfPopupWidth) {
+                    boundedLeft = Math.max(halfPopupWidth, containerRect.width - halfPopupWidth);
+                }
+                
                 setClickFootnote({
                     text,
                     marker: cite.textContent,
                     coords: {
                         top: rect.bottom - containerRect.top + 8,
-                        left: rect.left - containerRect.left + (rect.width / 2)
+                        left: boundedLeft
                     }
                 });
             };
