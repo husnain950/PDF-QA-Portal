@@ -1,9 +1,11 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Check, AlertTriangle, ArrowLeft, ArrowRight, Loader2, Clock } from 'lucide-react';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useReviewStore } from '../../stores/reviewStore';
 
 const ReviewToolbar = () => {
+    const navigate = useNavigate();
     const { 
         activeDocument, 
         sections, 
@@ -21,13 +23,10 @@ const ReviewToolbar = () => {
     const hasPrev = currentIndex > 0;
     const hasNext = currentIndex < sections.length - 1;
 
-    const navigateToSection = async (index) => {
+    const navigateToSection = (index) => {
         if (index < 0 || index >= sections.length) return;
         const targetSec = sections[index];
-        const sec = await fetchSection(activeDocument.id, targetSec.id);
-        if (sec && sec.start_page) {
-            setCurrentPage(sec.start_page);
-        }
+        navigate(`/review/${activeDocument.id}/${targetSec.id}`);
     };
 
     const handleApprove = async () => {
