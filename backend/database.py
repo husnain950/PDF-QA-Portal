@@ -8,6 +8,9 @@ async def get_db():
     # Make sure DB directory exists
     os.makedirs(DB_DIR, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("PRAGMA cache_size = 500;")
+        await db.execute("PRAGMA temp_store = FILE;")
         db.row_factory = aiosqlite.Row
         yield db
 
@@ -15,6 +18,8 @@ async def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("PRAGMA foreign_keys = ON;")
+        await db.execute("PRAGMA cache_size = 500;")
+        await db.execute("PRAGMA temp_store = FILE;")
         
         # Create documents table
         await db.execute("""

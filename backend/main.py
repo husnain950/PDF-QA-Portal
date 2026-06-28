@@ -41,6 +41,11 @@ async def lifespan(app: FastAPI):
 
     # Initialize database on startup
     await init_db()
+    
+    # Force garbage collection to free up memory from startup copies
+    import gc
+    gc.collect()
+    
     yield
 
 app = FastAPI(title="PDF-QA Portal API", lifespan=lifespan)
