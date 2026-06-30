@@ -25,8 +25,8 @@ def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[D
             "part_heading": context.get("part_heading"),
             "division_code": context.get("division_code"),
             "division_heading": context.get("division_heading"),
-            "section_code": str(sec_data.get("code", "")),
-            "section_heading": sec_data.get("heading", ""),
+            "section_code": str(sec_data.get("code") or ""),
+            "section_heading": str(sec_data.get("heading") or ""),
             "start_page": start_page,
             "end_page": end_page,
             "html_content": sec_data.get("html", ""),
@@ -114,6 +114,10 @@ def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[D
             part_context["part_code"] = part.get("code")
             part_context["part_heading"] = part.get("heading")
             
+            # If the part itself is a leaf content node (contains HTML and has no sub-divisions or sub-sections)
+            if "html" in part and not part.get("divisions") and not part.get("sections"):
+                process_section(part, part_context)
+            
             # Process sections directly in part
             for sec in part.get("sections", []):
                 process_section(sec, part_context)
@@ -124,6 +128,10 @@ def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[D
                 div_context["division_code"] = div.get("code")
                 div_context["division_heading"] = div.get("heading")
                 
+                # If the division itself is a leaf content node (contains HTML and has no sub-sections)
+                if "html" in div and not div.get("sections"):
+                    process_section(div, div_context)
+                
                 for sec in div.get("sections", []):
                     process_section(sec, div_context)
                     
@@ -132,6 +140,10 @@ def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[D
             div_context = sch_context.copy()
             div_context["division_code"] = div.get("code")
             div_context["division_heading"] = div.get("heading")
+            
+            # If the division itself is a leaf content node (contains HTML and has no sub-sections)
+            if "html" in div and not div.get("sections"):
+                process_section(div, div_context)
             
             for sec in div.get("sections", []):
                 process_section(sec, div_context)
