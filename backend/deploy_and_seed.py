@@ -117,10 +117,10 @@ async def deploy_and_seed():
                 for fn in chunk:
                     await db.execute(
                         """
-                        INSERT INTO footnotes (id, section_id, marker, page, text, review_status)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO footnotes (id, section_id, marker, page, text, html_content, review_status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (fn["id"], fn["section_id"], fn["marker"], fn["page"], fn["text"], fn["review_status"])
+                        (fn["id"], fn["section_id"], fn["marker"], fn["page"], fn["text"], fn.get("html_content", ""), fn["review_status"])
                     )
                 await db.commit()
             

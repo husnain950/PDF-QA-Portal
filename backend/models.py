@@ -66,6 +66,7 @@ class FootnoteBase(BaseModel):
 class FootnoteResponse(FootnoteBase):
     id: str
     section_id: str
+    html_content: Optional[str] = None
     review_status: str
 
     class Config:

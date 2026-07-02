@@ -47,6 +47,7 @@ def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[D
                 "marker": fn.get("marker", ""),
                 "page": fn.get("page") or start_page,
                 "text": fn.get("text", ""),
+                "html_content": fn.get("html", ""),
                 "review_status": "pending"
             })
 
