@@ -39,6 +39,19 @@ const FootnoteText = ({ footnote, annotations, onSelect }) => {
         }
     };
 
+    // If we have HTML content (with tables), render it directly
+    if (footnote.html_content) {
+        return (
+            <div
+                ref={textRef}
+                className="footnote-text footnote-html-content"
+                onMouseUp={handleMouseUp}
+                dangerouslySetInnerHTML={{ __html: footnote.html_content }}
+                style={{ '--font-mono': "'Fira Code', 'Cascadia Code', 'Courier New', monospace" }}
+            />
+        );
+    }
+
     const fnAnnots = annotations ? annotations.filter(a => a.footnote_id === footnote.id && a.status === 'open') : [];
     if (fnAnnots.length === 0) {
         return (

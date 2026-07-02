@@ -65,6 +65,7 @@ async def init_db():
             marker        TEXT NOT NULL,
             page          INTEGER,
             text          TEXT NOT NULL,
+            html_content  TEXT,
             review_status TEXT NOT NULL DEFAULT 'pending'
         );
         """)
@@ -107,6 +108,17 @@ async def init_db():
                 await db.commit()
             except Exception as migrate_err:
                 print(f"Migration error (status): {migrate_err}")
+
+        # Migration: Add html_content column to footnotes if it doesn't exist
+        try:
+            async with db.execute("SELECT html_content FROM footnotes LIMIT 1;") as _:
+                pass
+        except Exception:
+            try:
+                await db.execute("ALTER TABLE footnotes ADD COLUMN html_content TEXT;")
+                await db.commit()
+            except Exception as migrate_err:
+                print(f"Migration error (html_content): {migrate_err}")
 
         # Indexes
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id);")

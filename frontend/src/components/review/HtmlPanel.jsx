@@ -397,7 +397,13 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                             animation: 'popFade 0.1s ease-out'
                         }}>
                             <div style={{ fontWeight: 800, color: 'var(--color-accent)', marginBottom: 2 }}>Footnote {hoverFootnote.marker}</div>
-                            <div style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}>{hoverFootnote.text}</div>
+                            <div style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}>
+                                {hoverFootnote.text
+                                    ? hoverFootnote.text.split('\n')[0].trim().slice(0, 200) +
+                                      (hoverFootnote.text.split('\n')[0].trim().length > 200 || hoverFootnote.text.includes('\n') ? '…' : '')
+                                    : ''
+                                }
+                            </div>
                         </div>
                     </div>
                 )}

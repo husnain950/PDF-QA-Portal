@@ -72,7 +72,7 @@ async def get_section(document_id: str, section_id: str, db: aiosqlite.Connectio
         raise HTTPException(status_code=404, detail="Section not found")
 
     # Get footnotes for this section
-    async with db.execute("SELECT id, section_id, marker, page, text, review_status FROM footnotes WHERE section_id = ?", (section_id,)) as cursor:
+    async with db.execute("SELECT id, section_id, marker, page, text, html_content, review_status FROM footnotes WHERE section_id = ?", (section_id,)) as cursor:
         fn_rows = await cursor.fetchall()
 
     footnotes = [FootnoteResponse(
@@ -81,6 +81,7 @@ async def get_section(document_id: str, section_id: str, db: aiosqlite.Connectio
         marker=fn["marker"],
         page=fn["page"],
         text=fn["text"],
+        html_content=fn["html_content"],
         review_status=fn["review_status"]
     ) for fn in fn_rows]
 
@@ -125,7 +126,7 @@ async def get_sections_by_page(document_id: str, page_number: int, db: aiosqlite
     results = []
     for r in rows:
         # Fetch footnotes for each section
-        async with db.execute("SELECT id, section_id, marker, page, text, review_status FROM footnotes WHERE section_id = ?", (r["id"],)) as cursor:
+        async with db.execute("SELECT id, section_id, marker, page, text, html_content, review_status FROM footnotes WHERE section_id = ?", (r["id"],)) as cursor:
             fn_rows = await cursor.fetchall()
 
         footnotes = [FootnoteResponse(
@@ -134,6 +135,7 @@ async def get_sections_by_page(document_id: str, page_number: int, db: aiosqlite
             marker=fn["marker"],
             page=fn["page"],
             text=fn["text"],
+            html_content=fn["html_content"],
             review_status=fn["review_status"]
         ) for fn in fn_rows]
 
