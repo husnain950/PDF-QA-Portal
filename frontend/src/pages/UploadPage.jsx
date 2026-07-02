@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, File, AlertCircle, CheckCircle2, ChevronRight, Loader2 } from 'lucide-react';
+import { UploadCloud, AlertCircle, CheckCircle2, ChevronRight, Loader2 } from 'lucide-react';
 import AppShell from '../components/layout/AppShell';
 import { api } from '../utils/api';
 
@@ -19,8 +19,7 @@ const UploadPage = () => {
     const pdfInputRef = useRef(null);
     const jsonInputRef = useRef(null);
 
-    const handlePdfChange = (e) => {
-        const file = e.target.files[0];
+    const processPdfFile = (file) => {
         if (file && file.type === 'application/pdf') {
             setPdfFile(file);
             setError('');
@@ -34,14 +33,65 @@ const UploadPage = () => {
         }
     };
 
-    const handleJsonChange = (e) => {
-        const file = e.target.files[0];
+    const processJsonFile = (file) => {
         if (file && file.name.endsWith('.json')) {
             setJsonFile(file);
             setError('');
             validateJsonLocally(file);
         } else {
             setError('Please upload a valid JSON file.');
+        }
+    };
+
+    const handlePdfChange = (e) => {
+        const file = e.target.files[0];
+        processPdfFile(file);
+    };
+
+    const handleJsonChange = (e) => {
+        const file = e.target.files[0];
+        processJsonFile(file);
+    };
+
+    // Drag-and-drop state & handlers
+    const [isPdfDragActive, setIsPdfDragActive] = useState(false);
+    const [isJsonDragActive, setIsJsonDragActive] = useState(false);
+
+    const handlePdfDrag = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.type === "dragenter" || e.type === "dragover") {
+            setIsPdfDragActive(true);
+        } else if (e.type === "dragleave") {
+            setIsPdfDragActive(false);
+        }
+    };
+
+    const handlePdfDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsPdfDragActive(false);
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            processPdfFile(e.dataTransfer.files[0]);
+        }
+    };
+
+    const handleJsonDrag = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.type === "dragenter" || e.type === "dragover") {
+            setIsJsonDragActive(true);
+        } else if (e.type === "dragleave") {
+            setIsJsonDragActive(false);
+        }
+    };
+
+    const handleJsonDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsJsonDragActive(false);
+        if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+            processJsonFile(e.dataTransfer.files[0]);
         }
     };
 
@@ -151,8 +201,12 @@ const UploadPage = () => {
                     <div>
                         <span className="form-label">PDF File (Original Render)</span>
                         <div 
-                            className="dropzone"
+                            className={`dropzone ${isPdfDragActive ? 'active' : ''}`}
                             onClick={() => pdfInputRef.current.click()}
+                            onDragEnter={handlePdfDrag}
+                            onDragOver={handlePdfDrag}
+                            onDragLeave={handlePdfDrag}
+                            onDrop={handlePdfDrop}
                         >
                             <input 
                                 type="file" 
@@ -177,8 +231,12 @@ const UploadPage = () => {
                     <div>
                         <span className="form-label">JSON File (Parsed Structure)</span>
                         <div 
-                            className="dropzone"
+                            className={`dropzone ${isJsonDragActive ? 'active' : ''}`}
                             onClick={() => jsonInputRef.current.click()}
+                            onDragEnter={handleJsonDrag}
+                            onDragOver={handleJsonDrag}
+                            onDragLeave={handleJsonDrag}
+                            onDrop={handleJsonDrop}
                         >
                             <input 
                                 type="file" 
