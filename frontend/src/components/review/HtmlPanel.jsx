@@ -397,7 +397,7 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                             animation: 'popFade 0.1s ease-out'
                         }}>
                             <div style={{ fontWeight: 800, color: 'var(--color-accent)', marginBottom: 2 }}>Footnote {hoverFootnote.marker}</div>
-                            <div>{hoverFootnote.text}</div>
+                            <div style={{ whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}>{hoverFootnote.text}</div>
                         </div>
                     </div>
                 )}
@@ -443,7 +443,7 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                                     &times;
                                 </button>
                             </div>
-                            <div style={{ lineHeight: 1.5, color: 'var(--color-text-secondary)' }}>{clickFootnote.text}</div>
+                            <div style={{ lineHeight: 1.5, color: 'var(--color-text-secondary)', whiteSpace: 'pre-wrap', fontFamily: 'var(--font-mono)' }}>{clickFootnote.text}</div>
                         </div>
                     </div>
                 )}

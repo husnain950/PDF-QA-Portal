@@ -665,8 +665,10 @@ input, button, select, textarea {
 }
 
 .footnote-text {
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     color: var(--color-text-secondary);
+    white-space: pre-wrap;
+    font-family: var(--font-mono);
 }
 
 /* --- Review Bottom Toolbar --- */
