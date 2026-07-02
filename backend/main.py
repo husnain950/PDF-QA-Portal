@@ -42,6 +42,53 @@ async def lifespan(app: FastAPI):
     # Initialize database on startup
     await init_db()
     
+    # Merge footnote HTML contents from seed_db_path into db_path if they differ
+    if os.path.exists(db_path) and os.path.exists(seed_db_path) and os.path.abspath(db_path) != os.path.abspath(seed_db_path):
+        print("Self-healing: Merging footnote HTML contents from seed database...")
+        try:
+            # We must use sqlite3 library here because we are in lifespan (non-async context or async aiosqlite works too)
+            # Since init_db is async, lifespan is async so we can use aiosqlite.
+            async with aiosqlite.connect(db_path) as dest_db:
+                # Attach the seed database
+                await dest_db.execute(f"ATTACH DATABASE '{seed_db_path}' AS seed_db;")
+                # Update html_content for footnotes where it is null/empty in destination
+                await dest_db.execute("""
+                    UPDATE footnotes 
+                    SET html_content = (
+                        SELECT sf.html_content 
+                        FROM seed_db.footnotes sf
+                        JOIN seed_db.sections ss ON sf.section_id = ss.id
+                        JOIN sections s ON footnotes.section_id = s.id
+                        WHERE s.document_id = ss.document_id
+                          AND COALESCE(s.chapter_code, '') = COALESCE(ss.chapter_code, '')
+                          AND COALESCE(s.part_code, '') = COALESCE(ss.part_code, '')
+                          AND COALESCE(s.division_code, '') = COALESCE(ss.division_code, '')
+                          AND COALESCE(s.section_code, '') = COALESCE(ss.section_code, '')
+                          AND s.sort_order = ss.sort_order
+                          AND sf.marker = footnotes.marker
+                    )
+                    WHERE (html_content IS NULL OR html_content = '')
+                      AND EXISTS (
+                          SELECT 1 
+                          FROM seed_db.footnotes sf
+                          JOIN seed_db.sections ss ON sf.section_id = ss.id
+                          JOIN sections s ON footnotes.section_id = s.id
+                          WHERE s.document_id = ss.document_id
+                            AND COALESCE(s.chapter_code, '') = COALESCE(ss.chapter_code, '')
+                            AND COALESCE(s.part_code, '') = COALESCE(ss.part_code, '')
+                            AND COALESCE(s.division_code, '') = COALESCE(ss.division_code, '')
+                            AND COALESCE(s.section_code, '') = COALESCE(ss.section_code, '')
+                            AND s.sort_order = ss.sort_order
+                            AND sf.marker = footnotes.marker
+                            AND sf.html_content IS NOT NULL
+                            AND sf.html_content != ''
+                      );
+                """)
+                await dest_db.commit()
+                print("Self-healing: Footnote HTML contents merged successfully.")
+        except Exception as e:
+            print(f"Self-healing: Failed to merge footnote HTML contents: {e}")
+
     # Force garbage collection to free up memory from startup copies
     import gc
     gc.collect()
