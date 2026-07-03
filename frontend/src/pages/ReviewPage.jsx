@@ -8,6 +8,7 @@ import SplitPane from '../components/review/SplitPane';
 import PdfPanel from '../components/review/PdfPanel';
 import HtmlPanel from '../components/review/HtmlPanel';
 import ReviewToolbar from '../components/review/ReviewToolbar';
+import Breadcrumbs from '../components/review/Breadcrumbs';
 
 import { useDocumentStore } from '../stores/documentStore';
 import { useReviewStore } from '../stores/reviewStore';
@@ -224,6 +225,12 @@ const ReviewPage = () => {
             sidebarContent={<Sidebar documentId={documentId} />}
             actions={actions}
         >
+            {viewMode === 'section' && activeSection && (
+                <Breadcrumbs section={activeSection} />
+            )}
+            {viewMode === 'page' && pageSections.length > 0 && (
+                <Breadcrumbs section={pageSections[0]} />
+            )}
             <SplitPane left={leftPanel} right={rightPanel} />
         </AppShell>
     );

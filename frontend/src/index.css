@@ -363,7 +363,7 @@ input, button, select, textarea {
 .split-pane {
     display: flex;
     width: 100%;
-    height: calc(100% - 64px); /* Subtract review toolbar height */
+    flex: 1;
     position: relative;
     overflow: hidden;
 }
