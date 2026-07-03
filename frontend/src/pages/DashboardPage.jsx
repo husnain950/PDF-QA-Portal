@@ -1,6 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, FileText, CheckCircle, AlertCircle, Clock, Trash2, Download } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle, AlertCircle, Clock, Trash2, Download, Upload, Loader2 } from 'lucide-react';
 import AppShell from '../components/layout/AppShell';
 import { useDocumentStore } from '../stores/documentStore';
 import { api } from '../utils/api';
@@ -9,9 +9,59 @@ const DashboardPage = () => {
     const navigate = useNavigate();
     const { documents, fetchDocuments, deleteDocument, loading } = useDocumentStore();
 
+    const [replacingDocId, setReplacingDocId] = useState(null);
+    const [replacingDocName, setReplacingDocName] = useState('');
+    const [replacingLoading, setReplacingLoading] = useState(false);
+    const replaceJsonInputRef = useRef(null);
+
     useEffect(() => {
         fetchDocuments();
     }, [fetchDocuments]);
+
+    const handleReplaceJsonClick = (docId, name, e) => {
+        e.stopPropagation();
+        setReplacingDocId(docId);
+        setReplacingDocName(name);
+        if (replaceJsonInputRef.current) {
+            replaceJsonInputRef.current.click();
+        }
+    };
+
+    const handleReplaceJsonFileChange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (!file.name.endsWith('.json')) {
+            alert('Please select a valid JSON file.');
+            e.target.value = '';
+            return;
+        }
+
+        const confirmMsg = `Are you sure you want to replace the JSON parsed structure for "${replacingDocName}"?\n\nWARNING: This will replace all sections and footnotes. Existing annotations and review statuses for this document will be reset.`;
+        if (!window.confirm(confirmMsg)) {
+            e.target.value = '';
+            setReplacingDocId(null);
+            setReplacingDocName('');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('json_file', file);
+
+        try {
+            setReplacingLoading(true);
+            await api.post(`/documents/${replacingDocId}/replace-json`, formData, true);
+            alert('JSON structure replaced successfully!');
+            fetchDocuments();
+        } catch (err) {
+            alert('Failed to replace JSON: ' + (err.message || 'Unknown error'));
+        } finally {
+            setReplacingLoading(false);
+            e.target.value = '';
+            setReplacingDocId(null);
+            setReplacingDocName('');
+        }
+    };
 
     const handleDelete = async (docId, name, e) => {
         e.stopPropagation();
@@ -51,6 +101,37 @@ const DashboardPage = () => {
                 </button>
             }
         >
+            <input 
+                type="file" 
+                ref={replaceJsonInputRef} 
+                style={{ display: 'none' }} 
+                accept=".json"
+                onChange={handleReplaceJsonFileChange}
+            />
+
+            {replacingLoading && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    width: '100vw',
+                    height: '100vh',
+                    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    zIndex: 9999,
+                    gap: 16,
+                    backdropFilter: 'blur(6px)'
+                }}>
+                    <Loader2 className="animate-spin" size={32} style={{ color: 'var(--color-accent)' }} />
+                    <span style={{ color: '#ffffff', fontWeight: 600, fontSize: '0.95rem', fontFamily: 'var(--font-heading)' }}>
+                        Replacing JSON structure & re-parsing sections...
+                    </span>
+                </div>
+            )}
+
             <div className="dashboard-container">
                 {/* Stats Summary Grid */}
                 <section className="stats-grid">
@@ -163,8 +244,18 @@ const DashboardPage = () => {
                                             </button>
 
                                             <button 
+                                                className="btn btn-secondary"
+                                                style={{ padding: '8px 12px', fontSize: '0.85rem', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}
+                                                onClick={(e) => handleReplaceJsonClick(doc.id, doc.name, e)}
+                                                title="Replace parsed JSON structure"
+                                            >
+                                                <Upload size={14} />
+                                                <span>Replace JSON</span>
+                                            </button>
+                                            
+                                            <button 
                                                 className="btn btn-danger"
-                                                style={{ padding: '8px 12px', marginLeft: 'auto' }}
+                                                style={{ padding: '8px 12px' }}
                                                 onClick={(e) => handleDelete(doc.id, doc.name, e)}
                                                 title="Delete Document"
                                             >
