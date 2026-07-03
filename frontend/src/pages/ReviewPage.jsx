@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader2, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertCircle, Upload, CheckCircle } from 'lucide-react';
 
 import AppShell from '../components/layout/AppShell';
 import Sidebar from '../components/layout/Sidebar';
@@ -18,6 +18,50 @@ import { api } from '../utils/api';
 const ReviewPage = () => {
     const { documentId, sectionId } = useParams();
     const navigate = useNavigate();
+
+    const [replacingLoading, setReplacingLoading] = useState(false);
+    const [successMessage, setSuccessMessage] = useState('');
+    const replaceJsonInputRef = useRef(null);
+
+    const handleReplaceJsonFileChange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (!file.name.endsWith('.json')) {
+            alert('Please select a valid JSON file.');
+            e.target.value = '';
+            return;
+        }
+
+        const confirmMsg = `Are you sure you want to replace the JSON parsed structure for this document?\n\nWARNING: This will replace all sections and footnotes. Existing annotations and review statuses will be reset.`;
+        if (!window.confirm(confirmMsg)) {
+            e.target.value = '';
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('json_file', file);
+
+        try {
+            setReplacingLoading(true);
+            await api.post(`/documents/${documentId}/replace-json`, formData, true);
+            
+            // Redirect to review page root (without sectionId) so it picks the new first section
+            navigate(`/review/${documentId}`, { replace: true });
+            
+            // Re-fetch document and sections
+            await fetchDocument(documentId);
+            await fetchSections(documentId);
+            
+            setSuccessMessage('JSON structure replaced successfully! All sections have been re-parsed.');
+            setTimeout(() => setSuccessMessage(''), 6000);
+        } catch (err) {
+            alert('Failed to replace JSON: ' + (err.message || 'Unknown error'));
+        } finally {
+            setReplacingLoading(false);
+            e.target.value = '';
+        }
+    };
 
     const { 
         activeDocument, 
@@ -188,32 +232,44 @@ const ReviewPage = () => {
         : '';
 
     const actions = (
-        <div className="flex align-center gap-2">
-            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>View:</span>
-            <div className="flex" style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
-                <button
-                    className={`btn ${viewMode === 'section' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 0, border: 'none' }}
-                    onClick={() => {
-                        setViewMode('section');
-                        const targetId = activeSection?.id || sections.find(s => s.review_status === 'pending')?.id || sections[0]?.id;
-                        if (targetId) {
-                            navigate(`/review/${documentId}/${targetId}`);
-                        }
-                    }}
-                >
-                    Section View
-                </button>
-                <button
-                    className={`btn ${viewMode === 'page' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 0, border: 'none' }}
-                    onClick={() => {
-                        setViewMode('page');
-                        navigate(`/review/${documentId}`);
-                    }}
-                >
-                    Page View
-                </button>
+        <div className="flex align-center gap-3">
+            <button
+                className="btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}
+                onClick={() => replaceJsonInputRef.current && replaceJsonInputRef.current.click()}
+                title="Replace parsed JSON structure for this document"
+            >
+                <Upload size={14} />
+                <span>Replace JSON</span>
+            </button>
+
+            <div className="flex align-center gap-2">
+                <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>View:</span>
+                <div className="flex" style={{ border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+                    <button
+                        className={`btn ${viewMode === 'section' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 0, border: 'none' }}
+                        onClick={() => {
+                            setViewMode('section');
+                            const targetId = activeSection?.id || sections.find(s => s.review_status === 'pending')?.id || sections[0]?.id;
+                            if (targetId) {
+                                navigate(`/review/${documentId}/${targetId}`);
+                            }
+                        }}
+                    >
+                        Section View
+                    </button>
+                    <button
+                        className={`btn ${viewMode === 'page' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', borderRadius: 0, border: 'none' }}
+                        onClick={() => {
+                            setViewMode('page');
+                            navigate(`/review/${documentId}`);
+                        }}
+                    >
+                        Page View
+                    </button>
+                </div>
             </div>
         </div>
     );
@@ -225,6 +281,52 @@ const ReviewPage = () => {
             sidebarContent={<Sidebar documentId={documentId} />}
             actions={actions}
         >
+            <input 
+                type="file" 
+                ref={replaceJsonInputRef} 
+                style={{ display: 'none' }} 
+                accept=".json"
+                onChange={handleReplaceJsonFileChange}
+            />
+
+            {replacingLoading && (
+                <div style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    width: '100vw',
+                    height: '100vh',
+                    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    zIndex: 9999,
+                    gap: 16,
+                    backdropFilter: 'blur(6px)'
+                }}>
+                    <Loader2 className="animate-spin" size={32} style={{ color: 'var(--color-accent)' }} />
+                    <span style={{ color: '#ffffff', fontWeight: 600, fontSize: '0.95rem', fontFamily: 'var(--font-heading)' }}>
+                        Replacing JSON structure & re-parsing sections...
+                    </span>
+                </div>
+            )}
+
+            {successMessage && (
+                <div className="flex align-center gap-2 p-3" style={{ 
+                    backgroundColor: 'var(--color-success-light)', 
+                    color: 'var(--color-success)', 
+                    borderBottom: '1px solid var(--color-success)', 
+                    padding: '10px 24px', 
+                    fontSize: '0.85rem',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}>
+                    <CheckCircle size={16} />
+                    <span>{successMessage}</span>
+                </div>
+            )}
+
             {viewMode === 'section' && activeSection && (
                 <Breadcrumbs section={activeSection} />
             )}

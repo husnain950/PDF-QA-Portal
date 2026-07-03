@@ -12,6 +12,7 @@ const DashboardPage = () => {
     const [replacingDocId, setReplacingDocId] = useState(null);
     const [replacingDocName, setReplacingDocName] = useState('');
     const [replacingLoading, setReplacingLoading] = useState(false);
+    const [successMessage, setSuccessMessage] = useState('');
     const replaceJsonInputRef = useRef(null);
 
     useEffect(() => {
@@ -51,7 +52,8 @@ const DashboardPage = () => {
         try {
             setReplacingLoading(true);
             await api.post(`/documents/${replacingDocId}/replace-json`, formData, true);
-            alert('JSON structure replaced successfully!');
+            setSuccessMessage('JSON structure replaced successfully! All sections and footnotes have been re-seeded.');
+            setTimeout(() => setSuccessMessage(''), 6000);
             fetchDocuments();
         } catch (err) {
             alert('Failed to replace JSON: ' + (err.message || 'Unknown error'));
@@ -133,6 +135,22 @@ const DashboardPage = () => {
             )}
 
             <div className="dashboard-container">
+                {successMessage && (
+                    <div className="flex align-center gap-2 p-3" style={{ 
+                        backgroundColor: 'var(--color-success-light)', 
+                        color: 'var(--color-success)', 
+                        borderRadius: 'var(--radius-sm)', 
+                        marginBottom: 24, 
+                        fontSize: '0.85rem',
+                        border: '1px solid var(--color-success)',
+                        display: 'flex',
+                        alignItems: 'center'
+                    }}>
+                        <CheckCircle size={16} />
+                        <span>{successMessage}</span>
+                    </div>
+                )}
+
                 {/* Stats Summary Grid */}
                 <section className="stats-grid">
                     <div className="stat-card">
