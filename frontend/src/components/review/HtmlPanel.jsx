@@ -3,114 +3,7 @@ import { useTextSelection } from '../../hooks/useTextSelection';
 import { useReviewStore } from '../../stores/reviewStore';
 import AnnotationPopover from '../annotations/AnnotationPopover';
 import FootnotePanel from '../footnotes/FootnotePanel';
-import { Copy, Check, Code, Eye, ChevronRight } from 'lucide-react';
-
-const Breadcrumbs = ({ section }) => {
-    if (!section) return null;
-
-    const {
-        chapter_code,
-        chapter_heading,
-        part_code,
-        part_heading,
-        division_code,
-        division_heading,
-        section_code,
-        section_heading
-    } = section;
-
-    const items = [];
-
-    const formatBreadcrumb = (type, code) => {
-        if (!code) return '';
-        const cleanCode = code.trim();
-        if (type === 'Section') {
-            if (cleanCode.toLowerCase().startsWith('section') || cleanCode.toLowerCase().startsWith('sec')) {
-                return cleanCode;
-            }
-            return `Section ${cleanCode}`;
-        }
-        if (cleanCode.toLowerCase().startsWith(type.toLowerCase())) {
-            return cleanCode;
-        }
-        return `${type} ${cleanCode}`;
-    };
-
-    if (chapter_code && chapter_code.trim()) {
-        const formatted = formatBreadcrumb('Chapter', chapter_code);
-        items.push({
-            type: 'Chapter',
-            code: formatted,
-            heading: chapter_heading
-        });
-    }
-
-    if (part_code && part_code.trim()) {
-        const formatted = formatBreadcrumb('Part', part_code);
-        items.push({
-            type: 'Part',
-            code: formatted,
-            heading: part_heading
-        });
-    }
-
-    if (division_code && division_code.trim()) {
-        const formatted = formatBreadcrumb('Division', division_code);
-        items.push({
-            type: 'Division',
-            code: formatted,
-            heading: division_heading
-        });
-    }
-
-    if (section_code && section_code.trim()) {
-        const formatted = formatBreadcrumb('Section', section_code);
-        items.push({
-            type: 'Section',
-            code: formatted,
-            heading: section_heading
-        });
-    }
-
-    if (items.length === 0) return null;
-
-    const abbrs = {
-        Chapter: 'Chapter|Ch',
-        Part: 'Part|Pt',
-        Division: 'Division|Div',
-        Section: 'Section|Sec'
-    };
-
-    return (
-        <div className="breadcrumbs-container" onClick={(e) => e.stopPropagation()}>
-            {items.map((item, idx) => {
-                const regexStr = `^(?:${abbrs[item.type] || item.type})\\s*`;
-                const displayCode = item.code
-                    .replace(new RegExp(regexStr, 'i'), '')
-                    .replace(/^[-_:\s]+/, '')
-                    .trim();
-
-                return (
-                    <React.Fragment key={idx}>
-                        {idx > 0 && <ChevronRight size={12} className="breadcrumb-separator" />}
-                        <div 
-                            className="breadcrumb-item" 
-                            title={`${item.code}${item.heading ? ': ' + item.heading : ''}`}
-                        >
-                            <span className="breadcrumb-type">{item.type}</span>
-                            <span className="breadcrumb-code">{displayCode}</span>
-                            {item.heading && (
-                                <span className="breadcrumb-heading">
-                                    &middot; {item.heading}
-                                </span>
-                            )}
-                        </div>
-                    </React.Fragment>
-                );
-            })}
-        </div>
-    );
-};
+import { Copy, Check, Code, Eye } from 'lucide-react';
 
 const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
     const containerRef = useRef(null);
@@ -421,8 +314,6 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                     </button>
                 </div>
             </div>
-
-            {paneMode === 'rendered' && <Breadcrumbs section={section} />}
 
             <div className="panel-body" style={{ position: 'relative' }}>
                 <div 
