@@ -295,43 +295,191 @@ async def replace_json(
 
     total_sections = len(sections)
 
-    # Database transaction: delete existing and insert new
+    # Fetch existing sections to build lookup
+    async with db.execute(
+        "SELECT id, chapter_code, part_code, division_code, section_code, html_content, review_status FROM sections WHERE document_id = ?",
+        (document_id,)
+    ) as cursor:
+        existing_sections_rows = await cursor.fetchall()
+
+    sec_lookup = {}
+    for row in existing_sections_rows:
+        key = (
+            row["chapter_code"] or "",
+            row["part_code"] or "",
+            row["division_code"] or "",
+            row["section_code"] or ""
+        )
+        sec_lookup[key] = {
+            "id": row["id"],
+            "html_content": row["html_content"] or "",
+            "review_status": row["review_status"]
+        }
+
+    # Fetch existing footnotes
+    async with db.execute(
+        """
+        SELECT f.id, f.section_id, f.marker, f.review_status
+        FROM footnotes f
+        JOIN sections s ON f.section_id = s.id
+        WHERE s.document_id = ?
+        """,
+        (document_id,)
+    ) as cursor:
+        existing_footnotes_rows = await cursor.fetchall()
+
+    fn_lookup = {}
+    for row in existing_footnotes_rows:
+        key = (row["section_id"], row["marker"])
+        fn_lookup[key] = {
+            "id": row["id"],
+            "review_status": row["review_status"]
+        }
+
+    used_section_ids = set()
+    used_footnote_ids = set()
+    section_id_map = {}
+
+    # Database transaction: delete/update/insert
     try:
         await db.execute("PRAGMA foreign_keys = ON;")
-        await db.execute("DELETE FROM sections WHERE document_id = ?", (document_id,))
         
-        # Insert sections
+        # Insert or update sections
         for sec in sections:
-            await db.execute(
-                """
-                INSERT INTO sections (
-                    id, document_id, chapter_code, chapter_heading, part_code, part_heading,
-                    division_code, division_heading, section_code, section_heading,
-                    start_page, end_page, html_content, plain_text, sort_order, review_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    sec["id"], document_id, sec["chapter_code"], sec["chapter_heading"],
-                    sec["part_code"], sec["part_heading"], sec["division_code"], sec["division_heading"],
-                    sec["section_code"], sec["section_heading"], sec["start_page"], sec["end_page"],
-                    sec["html_content"], sec["plain_text"], sec["sort_order"], sec["review_status"]
+            key = (
+                sec["chapter_code"] or "",
+                sec["part_code"] or "",
+                sec["division_code"] or "",
+                sec["section_code"] or ""
+            )
+            
+            if key in sec_lookup:
+                final_sec_id = sec_lookup[key]["id"]
+                review_status = sec_lookup[key]["review_status"]
+                
+                # Update existing section
+                await db.execute(
+                    """
+                    UPDATE sections SET
+                        chapter_heading = ?, part_code = ?, part_heading = ?,
+                        division_code = ?, division_heading = ?, section_heading = ?,
+                        start_page = ?, end_page = ?, html_content = ?, plain_text = ?,
+                        sort_order = ?, review_status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        sec["chapter_heading"], sec["part_code"], sec["part_heading"],
+                        sec["division_code"], sec["division_heading"], sec["section_heading"],
+                        sec["start_page"], sec["end_page"], sec["html_content"], sec["plain_text"],
+                        sec["sort_order"], review_status, final_sec_id
+                    )
                 )
-            )
+            else:
+                final_sec_id = sec["id"]
+                
+                # Insert new section
+                await db.execute(
+                    """
+                    INSERT INTO sections (
+                        id, document_id, chapter_code, chapter_heading, part_code, part_heading,
+                        division_code, division_heading, section_code, section_heading,
+                        start_page, end_page, html_content, plain_text, sort_order, review_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        final_sec_id, document_id, sec["chapter_code"], sec["chapter_heading"],
+                        sec["part_code"], sec["part_heading"], sec["division_code"], sec["division_heading"],
+                        sec["section_code"], sec["section_heading"], sec["start_page"], sec["end_page"],
+                        sec["html_content"], sec["plain_text"], sec["sort_order"], "pending"
+                    )
+                )
+                
+            section_id_map[sec["id"]] = final_sec_id
+            used_section_ids.add(final_sec_id)
 
-        # Insert footnotes
+        # Insert or update footnotes
         for fn in footnotes:
-            await db.execute(
-                """
-                INSERT INTO footnotes (id, section_id, marker, page, text, html_content, review_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (fn["id"], fn["section_id"], fn["marker"], fn["page"], fn["text"], fn.get("html_content", ""), fn["review_status"])
-            )
+            parsed_sec_id = fn["section_id"]
+            resolved_sec_id = section_id_map.get(parsed_sec_id)
+            if not resolved_sec_id:
+                continue
+                
+            key = (resolved_sec_id, fn["marker"])
+            if key in fn_lookup:
+                final_fn_id = fn_lookup[key]["id"]
+                review_status = fn_lookup[key]["review_status"]
+                
+                # Update existing footnote
+                await db.execute(
+                    """
+                    UPDATE footnotes SET
+                        section_id = ?, page = ?, text = ?, html_content = ?, review_status = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        resolved_sec_id, fn["page"], fn["text"], fn.get("html_content", ""),
+                        review_status, final_fn_id
+                    )
+                )
+            else:
+                final_fn_id = fn["id"]
+                
+                # Insert new footnote
+                await db.execute(
+                    """
+                    INSERT INTO footnotes (id, section_id, marker, page, text, html_content, review_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        final_fn_id, resolved_sec_id, fn["marker"], fn["page"], fn["text"],
+                        fn.get("html_content", ""), "pending"
+                    )
+                )
+                
+            used_footnote_ids.add(final_fn_id)
+
+        # Delete sections that are no longer present
+        existing_sec_ids = {row["id"] for row in existing_sections_rows}
+        sec_ids_to_delete = existing_sec_ids - used_section_ids
+        for s_id in sec_ids_to_delete:
+            await db.execute("DELETE FROM sections WHERE id = ?", (s_id,))
+
+        # Delete footnotes that are no longer present
+        existing_fn_ids = {row["id"] for row in existing_footnotes_rows}
+        fn_ids_to_delete = existing_fn_ids - used_footnote_ids
+        for f_id in fn_ids_to_delete:
+            await db.execute("DELETE FROM footnotes WHERE id = ?", (f_id,))
+
+        # Recalculate document status and metrics
+        query_stats = """
+            SELECT 
+                COUNT(*) as total,
+                COUNT(CASE WHEN review_status = 'pending' THEN 1 END) as pending,
+                COUNT(CASE WHEN review_status = 'approved' THEN 1 END) as approved,
+                COUNT(CASE WHEN review_status = 'has_issues' THEN 1 END) as has_issues
+            FROM sections
+            WHERE document_id = ?
+        """
+        async with db.execute(query_stats, (document_id,)) as cursor:
+            stats_row = await cursor.fetchone()
+            
+        total_count = stats_row["total"]
+        pending_count = stats_row["pending"]
+        approved_count = stats_row["approved"]
+        has_issues_count = stats_row["has_issues"]
+        reviewed_count = total_count - pending_count
+
+        if pending_count == 0:
+            doc_status = "completed"
+        elif pending_count == total_count:
+            doc_status = "pending"
+        else:
+            doc_status = "in_progress"
 
         # Update document metadata
         await db.execute(
-            "UPDATE documents SET total_sections = ?, status = 'pending' WHERE id = ?",
-            (total_sections, document_id)
+            "UPDATE documents SET total_sections = ?, status = ? WHERE id = ?",
+            (total_sections, doc_status, document_id)
         )
         
         await db.commit()
@@ -347,7 +495,13 @@ async def replace_json(
         total_sections=total_sections,
         total_pages=total_pages,
         uploaded_at=uploaded_at,
-        status="pending",
-        stats=DocumentStats(reviewed=0, approved=0, has_issues=0, pending=total_sections)
+        status=doc_status,
+        stats=DocumentStats(
+            reviewed=reviewed_count,
+            approved=approved_count,
+            has_issues=has_issues_count,
+            pending=pending_count
+        )
     )
+
 
