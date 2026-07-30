@@ -1,4 +1,5 @@
 import os
+
 import aiosqlite
 
 DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -31,7 +32,10 @@ async def init_db():
             total_sections INTEGER NOT NULL,
             total_pages   INTEGER NOT NULL,
             uploaded_at   TEXT NOT NULL,
-            status        TEXT NOT NULL DEFAULT 'pending'
+            status        TEXT NOT NULL DEFAULT 'pending',
+            source_type   TEXT NOT NULL DEFAULT 'upload',
+            source_key    TEXT,
+            source_hash   TEXT
         );
         """)
 
@@ -53,7 +57,8 @@ async def init_db():
             html_content  TEXT,
             plain_text    TEXT,
             sort_order    INTEGER NOT NULL,
-            review_status TEXT NOT NULL DEFAULT 'pending'
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            source_key    TEXT
         );
         """)
 
@@ -120,27 +125,83 @@ async def init_db():
             except Exception as migrate_err:
                 print(f"Migration error (html_content): {migrate_err}")
 
+        # Corpus-source migrations for existing portal databases.
+        for column, ddl in (
+            (
+                "source_type",
+                "ALTER TABLE documents ADD COLUMN source_type TEXT NOT NULL DEFAULT 'upload';",
+            ),
+            ("source_key", "ALTER TABLE documents ADD COLUMN source_key TEXT;"),
+            ("source_hash", "ALTER TABLE documents ADD COLUMN source_hash TEXT;"),
+        ):
+            try:
+                async with db.execute(
+                    f"SELECT {column} FROM documents LIMIT 1;"
+                ) as _:
+                    pass
+            except Exception:
+                try:
+                    await db.execute(ddl)
+                except Exception as migrate_err:
+                    print(f"Migration error (documents.{column}): {migrate_err}")
+
+        try:
+            async with db.execute("SELECT source_key FROM sections LIMIT 1;") as _:
+                pass
+        except Exception:
+            try:
+                await db.execute("ALTER TABLE sections ADD COLUMN source_key TEXT;")
+            except Exception as migrate_err:
+                print(f"Migration error (sections.source_key): {migrate_err}")
+
         # Indexes
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sections_document ON sections(document_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_sections_pages ON sections(document_id, start_page, end_page);")
+        await db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source
+            ON documents(source_type, source_key)
+            WHERE source_key IS NOT NULL;
+            """
+        )
+        await db.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_sections_source
+            ON sections(document_id, source_key)
+            WHERE source_key IS NOT NULL;
+            """
+        )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_footnotes_section ON footnotes(section_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_annotations_section ON annotations(section_id);")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_annotations_footnote ON annotations(footnote_id);")
 
-        # FTS5 Virtual Table
+        # The original external-content FTS table used a column named
+        # ``section_id`` that does not exist on ``sections`` (the real column
+        # is ``id``), so reads failed with ``no such column: T.section_id``.
+        # Migrate it once to a self-contained index with explicit triggers.
+        async with db.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'sections_fts'
+            """
+        ) as cursor:
+            fts_row = await cursor.fetchone()
+        if fts_row and "content=sections" in (fts_row[0] or "").replace(" ", ""):
+            await db.execute("DROP TRIGGER IF EXISTS sections_ai;")
+            await db.execute("DROP TRIGGER IF EXISTS sections_ad;")
+            await db.execute("DROP TRIGGER IF EXISTS sections_au;")
+            await db.execute("DROP TABLE sections_fts;")
+
         await db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
             section_id,
             section_code,
             section_heading,
             chapter_code,
-            plain_text,
-            content=sections,
-            content_rowid=rowid
+            plain_text
         );
         """)
 
-        # FTS5 Triggers
         await db.execute("""
         CREATE TRIGGER IF NOT EXISTS sections_ai AFTER INSERT ON sections BEGIN
             INSERT INTO sections_fts(rowid, section_id, section_code, section_heading, chapter_code, plain_text)
@@ -150,18 +211,35 @@ async def init_db():
 
         await db.execute("""
         CREATE TRIGGER IF NOT EXISTS sections_ad AFTER DELETE ON sections BEGIN
-            INSERT INTO sections_fts(sections_fts, rowid, section_id, section_code, section_heading, chapter_code, plain_text)
-            VALUES('delete', old.rowid, old.id, old.section_code, old.section_heading, old.chapter_code, old.plain_text);
+            DELETE FROM sections_fts WHERE rowid = old.rowid;
         END;
         """)
 
         await db.execute("""
         CREATE TRIGGER IF NOT EXISTS sections_au AFTER UPDATE ON sections BEGIN
-            INSERT INTO sections_fts(sections_fts, rowid, section_id, section_code, section_heading, chapter_code, plain_text)
-            VALUES('delete', old.rowid, old.id, old.section_code, old.section_heading, old.chapter_code, old.plain_text);
+            DELETE FROM sections_fts WHERE rowid = old.rowid;
             INSERT INTO sections_fts(rowid, section_id, section_code, section_heading, chapter_code, plain_text)
             VALUES (new.rowid, new.id, new.section_code, new.section_heading, new.chapter_code, new.plain_text);
         END;
         """)
+
+        async with db.execute("SELECT COUNT(*) FROM sections_fts;") as cursor:
+            fts_count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM sections;") as cursor:
+            section_count = (await cursor.fetchone())[0]
+        if fts_count != section_count:
+            await db.execute("DELETE FROM sections_fts;")
+            await db.execute(
+                """
+                INSERT INTO sections_fts(
+                    rowid, section_id, section_code, section_heading,
+                    chapter_code, plain_text
+                )
+                SELECT
+                    rowid, id, section_code, section_heading,
+                    chapter_code, plain_text
+                FROM sections
+                """
+            )
 
         await db.commit()

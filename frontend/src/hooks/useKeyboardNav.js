@@ -3,6 +3,8 @@ import { useEffect } from 'react';
 export const useKeyboardNav = ({ 
     onArrowLeft, 
     onArrowRight, 
+    onPreviousSection,
+    onNextSection,
     onEscape 
 }) => {
     useEffect(() => {
@@ -22,6 +24,12 @@ export const useKeyboardNav = ({
             } else if (e.key === 'ArrowRight' && onArrowRight) {
                 e.preventDefault();
                 onArrowRight();
+            } else if ((e.key === 'k' || e.key === 'K') && onPreviousSection) {
+                e.preventDefault();
+                onPreviousSection();
+            } else if ((e.key === 'j' || e.key === 'J') && onNextSection) {
+                e.preventDefault();
+                onNextSection();
             } else if (e.key === 'Escape' && onEscape) {
                 e.preventDefault();
                 onEscape();
@@ -32,5 +40,5 @@ export const useKeyboardNav = ({
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [onArrowLeft, onArrowRight, onEscape]);
+    }, [onArrowLeft, onArrowRight, onPreviousSection, onNextSection, onEscape]);
 };

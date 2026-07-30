@@ -1,24 +1,49 @@
 import json
 import uuid
-from typing import List, Tuple, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
-def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+
+def _stable_id(document_id: Optional[str], source_key: str) -> str:
+    if not document_id:
+        return str(uuid.uuid4())
+    return str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"pdf-qa-portal:{document_id}:{source_key}",
+        )
+    )
+
+
+def parse_json_document(
+    json_content: str,
+    document_id: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Flatten the enriched legal JSON into page-addressable review units.
+
+    ``source_key`` is a stable JSON-pointer-style path. It deliberately does not
+    use legal section codes because those codes repeat heavily in schedules and
+    amendment Acts.
+    """
+
     data = json.loads(json_content)
-    
-    sections = []
-    footnotes = []
+    sections: List[Dict[str, Any]] = []
+    footnotes: List[Dict[str, Any]] = []
     sort_order = 0
 
-    def process_section(sec_data: Dict[str, Any], context: Dict[str, Any]):
+    def process_section(
+        sec_data: Dict[str, Any],
+        context: Dict[str, Any],
+        source_key: str,
+    ) -> None:
         nonlocal sort_order
-        section_id = str(uuid.uuid4())
-        
-        # Determine start and end page
+
+        section_id = _stable_id(document_id, source_key)
         start_page = sec_data.get("start_page") or sec_data.get("page_number")
         end_page = sec_data.get("end_page") or start_page
 
         sec_row = {
             "id": section_id,
+            "source_key": source_key,
             "chapter_code": context.get("chapter_code"),
             "chapter_heading": context.get("chapter_heading"),
             "part_code": context.get("part_code"),
@@ -32,121 +57,123 @@ def parse_json_document(json_content: str) -> Tuple[List[Dict[str, Any]], List[D
             "html_content": sec_data.get("html", ""),
             "plain_text": sec_data.get("plain_text", ""),
             "sort_order": sort_order,
-            "review_status": "pending"
+            "review_status": "pending",
         }
         sections.append(sec_row)
         sort_order += 1
 
-        # Process footnotes
-        sec_footnotes = sec_data.get("footnotes", [])
-        for fn in sec_footnotes:
-            fn_id = str(uuid.uuid4())
-            footnotes.append({
-                "id": fn_id,
-                "section_id": section_id,
-                "marker": fn.get("marker", ""),
-                "page": fn.get("page") or start_page,
-                "text": fn.get("text", ""),
-                "html_content": fn.get("html", ""),
-                "review_status": "pending"
-            })
+        for index, footnote in enumerate(sec_data.get("footnotes") or []):
+            if not isinstance(footnote, dict):
+                continue
+            footnote_key = f"{source_key}/footnotes/{index}"
+            footnotes.append(
+                {
+                    "id": _stable_id(document_id, footnote_key),
+                    "source_key": footnote_key,
+                    "section_id": section_id,
+                    "marker": footnote.get("marker", ""),
+                    "page": footnote.get("page") or start_page,
+                    "text": footnote.get("text", ""),
+                    "html_content": footnote.get("html", ""),
+                    "review_status": "pending",
+                }
+            )
 
-    # Walk chapters
-    for ch in data.get("chapters", []):
-        ch_context = {
-            "chapter_code": ch.get("code"),
-            "chapter_heading": ch.get("heading"),
-            "part_code": None,
-            "part_heading": None,
-            "division_code": None,
-            "division_heading": None,
-        }
-        
-        # Process sections directly in chapter
-        for sec in ch.get("sections", []):
-            process_section(sec, ch_context)
-            
-        # Process parts in chapter
-        for part in ch.get("parts", []):
-            part_context = ch_context.copy()
-            part_context["part_code"] = part.get("code")
-            part_context["part_heading"] = part.get("heading")
-            
-            # Process sections directly in part
-            for sec in part.get("sections", []):
-                process_section(sec, part_context)
-                
-            # Process divisions in part
-            for div in part.get("divisions", []):
-                div_context = part_context.copy()
-                div_context["division_code"] = div.get("code")
-                div_context["division_heading"] = div.get("heading")
-                
-                for sec in div.get("sections", []):
-                    process_section(sec, div_context)
-                    
-        # Process divisions directly in chapter
-        for div in ch.get("divisions", []):
-            div_context = ch_context.copy()
-            div_context["division_code"] = div.get("code")
-            div_context["division_heading"] = div.get("heading")
-            
-            for sec in div.get("sections", []):
-                process_section(sec, div_context)
+    def process_container(
+        node: Dict[str, Any],
+        context: Dict[str, Any],
+        source_key: str,
+        kind: str,
+        allow_content_leaf: bool,
+    ) -> None:
+        next_context = context.copy()
+        code = node.get("code")
+        heading = node.get("heading")
 
-    # Walk schedules
-    for sch in data.get("schedules", []):
-        sch_context = {
-            "chapter_code": sch.get("code"),
-            "chapter_heading": sch.get("heading"),
-            "part_code": None,
-            "part_heading": None,
-            "division_code": None,
-            "division_heading": None,
-        }
-        
-        # Process sections directly in schedule
-        for sec in sch.get("sections", []):
-            process_section(sec, sch_context)
-            
-        # Process parts in schedule
-        for part in sch.get("parts", []):
-            part_context = sch_context.copy()
-            part_context["part_code"] = part.get("code")
-            part_context["part_heading"] = part.get("heading")
-            
-            # If the part itself is a leaf content node (contains HTML and has no sub-divisions or sub-sections)
-            if "html" in part and not part.get("divisions") and not part.get("sections"):
-                process_section(part, part_context)
-            
-            # Process sections directly in part
-            for sec in part.get("sections", []):
-                process_section(sec, part_context)
-                
-            # Process divisions in part
-            for div in part.get("divisions", []):
-                div_context = part_context.copy()
-                div_context["division_code"] = div.get("code")
-                div_context["division_heading"] = div.get("heading")
-                
-                # If the division itself is a leaf content node (contains HTML and has no sub-sections)
-                if "html" in div and not div.get("sections"):
-                    process_section(div, div_context)
-                
-                for sec in div.get("sections", []):
-                    process_section(sec, div_context)
-                    
-        # Process divisions directly in schedule
-        for div in sch.get("divisions", []):
-            div_context = sch_context.copy()
-            div_context["division_code"] = div.get("code")
-            div_context["division_heading"] = div.get("heading")
-            
-            # If the division itself is a leaf content node (contains HTML and has no sub-sections)
-            if "html" in div and not div.get("sections"):
-                process_section(div, div_context)
-            
-            for sec in div.get("sections", []):
-                process_section(sec, div_context)
+        if kind == "chapter" or kind == "schedule":
+            next_context.update(
+                chapter_code=code,
+                chapter_heading=heading,
+                part_code=None,
+                part_heading=None,
+                division_code=None,
+                division_heading=None,
+            )
+        elif kind == "part":
+            next_context.update(
+                part_code=code,
+                part_heading=heading,
+                division_code=None,
+                division_heading=None,
+            )
+        elif kind == "division":
+            next_context.update(
+                division_code=code,
+                division_heading=heading,
+            )
+
+        child_collections = ("sections", "parts", "divisions")
+        has_children = any(node.get(key) for key in child_collections)
+        if allow_content_leaf and "html" in node and not has_children:
+            process_section(node, next_context, source_key)
+
+        # Keep the portal's established reading order: direct sections first,
+        # followed by parts and divisions.
+        for index, section in enumerate(node.get("sections") or []):
+            if isinstance(section, dict):
+                process_section(
+                    section,
+                    next_context,
+                    f"{source_key}/sections/{index}",
+                )
+
+        for index, part in enumerate(node.get("parts") or []):
+            if isinstance(part, dict):
+                process_container(
+                    part,
+                    next_context,
+                    f"{source_key}/parts/{index}",
+                    "part",
+                    allow_content_leaf=kind == "schedule" or allow_content_leaf,
+                )
+
+        for index, division in enumerate(node.get("divisions") or []):
+            if isinstance(division, dict):
+                process_container(
+                    division,
+                    next_context,
+                    f"{source_key}/divisions/{index}",
+                    "division",
+                    allow_content_leaf=kind == "schedule" or allow_content_leaf,
+                )
+
+    empty_context = {
+        "chapter_code": None,
+        "chapter_heading": None,
+        "part_code": None,
+        "part_heading": None,
+        "division_code": None,
+        "division_heading": None,
+    }
+
+    for index, chapter in enumerate(data.get("chapters") or []):
+        if isinstance(chapter, dict):
+            process_container(
+                chapter,
+                empty_context,
+                f"/chapters/{index}",
+                "chapter",
+                allow_content_leaf=False,
+            )
+
+    for index, schedule in enumerate(data.get("schedules") or []):
+        if isinstance(schedule, dict):
+            process_container(
+                schedule,
+                empty_context,
+                f"/schedules/{index}",
+                "schedule",
+                allow_content_leaf=False,
+            )
 
     return sections, footnotes

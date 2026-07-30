@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, FileText, CheckCircle, AlertCircle, Clock, Trash2, Download, Upload, Loader2 } from 'lucide-react';
+import { UploadCloud, FileText, CheckCircle, Clock, Trash2, Download, Upload, Loader2, Search } from 'lucide-react';
 import AppShell from '../components/layout/AppShell';
 import { useDocumentStore } from '../stores/documentStore';
 import { api } from '../utils/api';
+import { filterDocuments } from '../utils/documentFilters';
 
 const DashboardPage = () => {
     const navigate = useNavigate();
@@ -13,6 +14,8 @@ const DashboardPage = () => {
     const [replacingDocName, setReplacingDocName] = useState('');
     const [replacingLoading, setReplacingLoading] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
+    const [documentQuery, setDocumentQuery] = useState('');
+    const [sourceFilter, setSourceFilter] = useState('all');
     const replaceJsonInputRef = useRef(null);
 
     useEffect(() => {
@@ -38,7 +41,7 @@ const DashboardPage = () => {
             return;
         }
 
-        const confirmMsg = `Are you sure you want to replace the JSON parsed structure for "${replacingDocName}"?\n\nWARNING: This will replace all sections and footnotes. Existing annotations and review statuses for this document will be reset.`;
+        const confirmMsg = `Replace the parsed JSON structure for "${replacingDocName}"?\n\nStable sections keep their QA state. The portal will stop the replacement if it would remove annotated or reviewed evidence.`;
         if (!window.confirm(confirmMsg)) {
             e.target.value = '';
             setReplacingDocId(null);
@@ -52,7 +55,7 @@ const DashboardPage = () => {
         try {
             setReplacingLoading(true);
             await api.post(`/documents/${replacingDocId}/replace-json`, formData, true);
-            setSuccessMessage('JSON structure replaced successfully! All sections and footnotes have been re-seeded.');
+            setSuccessMessage('JSON structure replaced safely. Stable QA state was preserved.');
             setTimeout(() => setSuccessMessage(''), 6000);
             fetchDocuments();
         } catch (err) {
@@ -82,6 +85,11 @@ const DashboardPage = () => {
     const totalIssues = documents.reduce((sum, doc) => sum + (doc.stats?.has_issues || 0), 0);
     const totalReviewed = documents.reduce((sum, doc) => sum + (doc.stats?.reviewed || 0), 0);
     const overallCompletion = totalSections > 0 ? Math.round((totalReviewed / totalSections) * 100) : 0;
+    const filteredDocuments = filterDocuments(
+        documents,
+        documentQuery,
+        sourceFilter,
+    );
 
     const handleExport = (docId, format, e) => {
         e.stopPropagation();
@@ -175,7 +183,46 @@ const DashboardPage = () => {
                     </div>
                 </section>
 
-                <h2 style={{ marginBottom: 24, fontSize: '1.25rem' }}>Your Documents</h2>
+                <section className="library-head">
+                    <div>
+                        <span className="library-kicker">Legal review library</span>
+                        <h2>Acts and editions</h2>
+                        <p>
+                            Showing {filteredDocuments.length.toLocaleString()} of {documents.length.toLocaleString()} documents
+                        </p>
+                    </div>
+                    <div className="library-controls">
+                        <label className="document-search" htmlFor="document-filter">
+                            <Search size={16} aria-hidden="true" />
+                            <span className="sr-only">Filter documents</span>
+                            <input
+                                id="document-filter"
+                                type="search"
+                                value={documentQuery}
+                                onChange={(event) => setDocumentQuery(event.target.value)}
+                                placeholder="Find an Act or edition…"
+                                autoComplete="off"
+                            />
+                        </label>
+                        <div className="source-filters" role="group" aria-label="Document source">
+                            {[
+                                ['all', 'All'],
+                                ['acts_corpus', 'ACT Corpus'],
+                                ['upload', 'Manual Uploads'],
+                            ].map(([value, label]) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    className={`source-filter ${sourceFilter === value ? 'active' : ''}`}
+                                    onClick={() => setSourceFilter(value)}
+                                    aria-pressed={sourceFilter === value}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                </section>
 
                 {loading.documents ? (
                     <div style={{ textAlign: 'center', padding: 48, color: 'var(--color-text-muted)' }}>
@@ -193,9 +240,15 @@ const DashboardPage = () => {
                             <span>Upload Your First PDF + JSON</span>
                         </button>
                     </div>
+                ) : filteredDocuments.length === 0 ? (
+                    <div className="glass-panel library-empty">
+                        <Search size={32} aria-hidden="true" />
+                        <h3>No matching documents</h3>
+                        <p>Try another title or choose a different source filter.</p>
+                    </div>
                 ) : (
                     <div className="document-grid">
-                        {documents.map((doc) => {
+                        {filteredDocuments.map((doc) => {
                             const reviewedCount = doc.stats?.reviewed || 0;
                             const totalCount = doc.total_sections;
                             const compPercent = totalCount > 0 ? Math.round((reviewedCount / totalCount) * 100) : 0;
@@ -212,7 +265,12 @@ const DashboardPage = () => {
                                 >
                                     <div className="document-info">
                                         <div>
-                                            <h3 className="document-name">{doc.name}</h3>
+                                            <div className="document-title-row">
+                                                <span className={`source-badge ${doc.source_type === 'acts_corpus' ? 'act' : 'upload'}`}>
+                                                    {doc.source_type === 'acts_corpus' ? 'ACT Corpus' : 'Manual'}
+                                                </span>
+                                                <h3 className="document-name">{doc.name}</h3>
+                                            </div>
                                             <div className="document-meta flex align-center gap-2">
                                                 <Clock size={12} />
                                                 <span>Uploaded on {new Date(doc.uploaded_at).toLocaleDateString()}</span>
@@ -261,15 +319,17 @@ const DashboardPage = () => {
                                                 <span>CSV</span>
                                             </button>
 
-                                            <button 
-                                                className="btn btn-secondary"
-                                                style={{ padding: '8px 12px', fontSize: '0.85rem', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}
-                                                onClick={(e) => handleReplaceJsonClick(doc.id, doc.name, e)}
-                                                title="Replace parsed JSON structure"
-                                            >
-                                                <Upload size={14} />
-                                                <span>Replace JSON</span>
-                                            </button>
+                                            {doc.source_type !== 'acts_corpus' && (
+                                                <button
+                                                    className="btn btn-secondary"
+                                                    style={{ padding: '8px 12px', fontSize: '0.85rem', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}
+                                                    onClick={(e) => handleReplaceJsonClick(doc.id, doc.name, e)}
+                                                    title="Replace parsed JSON structure"
+                                                >
+                                                    <Upload size={14} />
+                                                    <span>Replace JSON</span>
+                                                </button>
+                                            )}
                                             
                                             <button 
                                                 className="btn btn-danger"

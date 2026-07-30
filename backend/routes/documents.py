@@ -1,22 +1,32 @@
 import os
+import tempfile
 import uuid
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status
-from fastapi.responses import JSONResponse
+
 import aiosqlite
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 from backend.database import get_db
 from backend.models import DocumentResponse, DocumentStats
-from backend.services.pdf_service import get_pdf_page_count
+from backend.runtime import UPLOAD_DIR
+from backend.services.document_store import (
+    ReviewConflict,
+    apply_parsed_document,
+    document_status,
+)
 from backend.services.json_parser import parse_json_document
+from backend.services.pdf_service import get_pdf_page_count
 
 router = APIRouter(prefix="/documents", tags=["documents"])
-
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "uploads")
 
 def get_upload_path(filename: str) -> str:
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     return os.path.join(UPLOAD_DIR, filename)
+
+def safe_upload_name(filename: str | None, fallback: str) -> str:
+    cleaned = os.path.basename(filename or "").replace("\x00", "")
+    return cleaned or fallback
 
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
@@ -26,14 +36,14 @@ async def upload_document(
     db: aiosqlite.Connection = Depends(get_db)
 ):
     # Validate file formats
-    if not pdf.filename.endswith(".pdf"):
+    if not (pdf.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="PDF file must have .pdf extension")
-    if not json_file.filename.endswith(".json"):
+    if not (json_file.filename or "").lower().endswith(".json"):
         raise HTTPException(status_code=400, detail="JSON file must have .json extension")
 
     doc_id = str(uuid.uuid4())
-    pdf_filename = f"{doc_id}_{pdf.filename}"
-    json_filename = f"{doc_id}_{json_file.filename}"
+    pdf_filename = f"{doc_id}_{safe_upload_name(pdf.filename, 'document.pdf')}"
+    json_filename = f"{doc_id}_{safe_upload_name(json_file.filename, 'document.json')}"
 
     pdf_path = get_upload_path(pdf_filename)
     json_path = get_upload_path(json_filename)
@@ -67,7 +77,7 @@ async def upload_document(
 
     # Parse JSON sections and footnotes
     try:
-        sections, footnotes = parse_json_document(json_content)
+        sections, footnotes = parse_json_document(json_content, document_id=doc_id)
     except Exception as e:
         os.remove(pdf_path)
         os.remove(json_path)
@@ -81,10 +91,25 @@ async def upload_document(
         # Insert document
         await db.execute(
             """
-            INSERT INTO documents (id, name, pdf_filename, json_filename, total_sections, total_pages, uploaded_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (
+                id, name, pdf_filename, json_filename, total_sections,
+                total_pages, uploaded_at, status, source_type, source_key,
+                source_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (doc_id, name, pdf_filename, json_filename, total_sections, total_pages, uploaded_at, "pending")
+            (
+                doc_id,
+                name,
+                pdf_filename,
+                json_filename,
+                total_sections,
+                total_pages,
+                uploaded_at,
+                "pending",
+                "upload",
+                None,
+                None,
+            ),
         )
 
         # Insert sections
@@ -94,14 +119,16 @@ async def upload_document(
                 INSERT INTO sections (
                     id, document_id, chapter_code, chapter_heading, part_code, part_heading,
                     division_code, division_heading, section_code, section_heading,
-                    start_page, end_page, html_content, plain_text, sort_order, review_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_page, end_page, html_content, plain_text, sort_order,
+                    review_status, source_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sec["id"], doc_id, sec["chapter_code"], sec["chapter_heading"],
                     sec["part_code"], sec["part_heading"], sec["division_code"], sec["division_heading"],
                     sec["section_code"], sec["section_heading"], sec["start_page"], sec["end_page"],
-                    sec["html_content"], sec["plain_text"], sec["sort_order"], sec["review_status"]
+                    sec["html_content"], sec["plain_text"], sec["sort_order"],
+                    sec["review_status"], sec["source_key"]
                 )
             )
 
@@ -134,6 +161,8 @@ async def upload_document(
         total_pages=total_pages,
         uploaded_at=uploaded_at,
         status="pending",
+        source_type="upload",
+        source_key=None,
         stats=DocumentStats(reviewed=0, approved=0, has_issues=0, pending=total_sections)
     )
 
@@ -141,7 +170,8 @@ async def upload_document(
 async def list_documents(db: aiosqlite.Connection = Depends(get_db)):
     query = """
         SELECT 
-            d.id, d.name, d.pdf_filename, d.json_filename, d.total_sections, d.total_pages, d.uploaded_at, d.status,
+            d.id, d.name, d.pdf_filename, d.json_filename, d.total_sections,
+            d.total_pages, d.uploaded_at, d.status, d.source_type, d.source_key,
             COUNT(CASE WHEN s.review_status != 'pending' THEN 1 END) as reviewed,
             COUNT(CASE WHEN s.review_status = 'approved' THEN 1 END) as approved,
             COUNT(CASE WHEN s.review_status = 'has_issues' THEN 1 END) as has_issues,
@@ -165,6 +195,8 @@ async def list_documents(db: aiosqlite.Connection = Depends(get_db)):
             total_pages=r["total_pages"],
             uploaded_at=r["uploaded_at"],
             status=r["status"],
+            source_type=r["source_type"],
+            source_key=r["source_key"],
             stats=DocumentStats(
                 reviewed=r["reviewed"],
                 approved=r["approved"],
@@ -178,7 +210,8 @@ async def list_documents(db: aiosqlite.Connection = Depends(get_db)):
 async def get_document(document_id: str, db: aiosqlite.Connection = Depends(get_db)):
     query = """
         SELECT 
-            d.id, d.name, d.pdf_filename, d.json_filename, d.total_sections, d.total_pages, d.uploaded_at, d.status,
+            d.id, d.name, d.pdf_filename, d.json_filename, d.total_sections,
+            d.total_pages, d.uploaded_at, d.status, d.source_type, d.source_key,
             COUNT(CASE WHEN s.review_status != 'pending' THEN 1 END) as reviewed,
             COUNT(CASE WHEN s.review_status = 'approved' THEN 1 END) as approved,
             COUNT(CASE WHEN s.review_status = 'has_issues' THEN 1 END) as has_issues,
@@ -203,6 +236,8 @@ async def get_document(document_id: str, db: aiosqlite.Connection = Depends(get_
         total_pages=r["total_pages"],
         uploaded_at=r["uploaded_at"],
         status=r["status"],
+        source_type=r["source_type"],
+        source_key=r["source_key"],
         stats=DocumentStats(
             reviewed=r["reviewed"],
             approved=r["approved"],
@@ -261,247 +296,107 @@ async def replace_json(
     json_file: UploadFile = File(...),
     db: aiosqlite.Connection = Depends(get_db)
 ):
-    if not json_file.filename.endswith(".json"):
+    if not (json_file.filename or "").lower().endswith(".json"):
         raise HTTPException(status_code=400, detail="JSON file must have .json extension")
 
-    # Get document to verify it exists and retrieve json_filename and name
-    async with db.execute("SELECT name, pdf_filename, json_filename, total_pages, uploaded_at FROM documents WHERE id = ?", (document_id,)) as cursor:
+    async with db.execute(
+        """
+        SELECT name, pdf_filename, json_filename, total_pages, uploaded_at,
+               source_type, source_key
+        FROM documents
+        WHERE id = ?
+        """,
+        (document_id,),
+    ) as cursor:
         r = await cursor.fetchone()
     if not r:
         raise HTTPException(status_code=404, detail="Document not found")
+    if r["source_type"] == "acts_corpus":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "ACT Corpus documents are managed by backend.sync_acts; "
+                "update the canonical export and run the sync command instead."
+            ),
+        )
 
-    name = r["name"]
-    pdf_filename = r["pdf_filename"]
-    json_filename = r["json_filename"]
-    total_pages = r["total_pages"]
-    uploaded_at = r["uploaded_at"]
-
-    json_path = get_upload_path(json_filename)
-
-    # Save/overwrite JSON file on disk
     try:
         json_content_bytes = await json_file.read()
-        with open(json_path, "wb") as f:
-            f.write(json_content_bytes)
         json_content = json_content_bytes.decode("utf-8")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to overwrite JSON file: {e}")
-
-    # Parse JSON
-    try:
-        sections, footnotes = parse_json_document(json_content)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse JSON document: {e}")
-
-    total_sections = len(sections)
-
-    # Fetch existing sections to build lookup
-    async with db.execute(
-        "SELECT id, chapter_code, part_code, division_code, section_code, html_content, review_status FROM sections WHERE document_id = ?",
-        (document_id,)
-    ) as cursor:
-        existing_sections_rows = await cursor.fetchall()
-
-    sec_lookup = {}
-    for row in existing_sections_rows:
-        key = (
-            row["chapter_code"] or "",
-            row["part_code"] or "",
-            row["division_code"] or "",
-            row["section_code"] or ""
+        sections, footnotes = parse_json_document(
+            json_content,
+            document_id=document_id,
         )
-        sec_lookup[key] = {
-            "id": row["id"],
-            "html_content": row["html_content"] or "",
-            "review_status": row["review_status"]
-        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to parse JSON document: {e}",
+        )
 
-    # Fetch existing footnotes
-    async with db.execute(
-        """
-        SELECT f.id, f.section_id, f.marker, f.review_status
-        FROM footnotes f
-        JOIN sections s ON f.section_id = s.id
-        WHERE s.document_id = ?
-        """,
-        (document_id,)
-    ) as cursor:
-        existing_footnotes_rows = await cursor.fetchall()
+    json_path = get_upload_path(r["json_filename"])
+    previous_bytes = None
+    if os.path.exists(json_path):
+        with open(json_path, "rb") as existing_file:
+            previous_bytes = existing_file.read()
 
-    fn_lookup = {}
-    for row in existing_footnotes_rows:
-        key = (row["section_id"], row["marker"])
-        fn_lookup[key] = {
-            "id": row["id"],
-            "review_status": row["review_status"]
-        }
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=os.path.dirname(json_path),
+        prefix=".replace-",
+        suffix=".json",
+        delete=False,
+    ) as staged:
+        staged.write(json_content_bytes)
+        staged_path = staged.name
 
-    used_section_ids = set()
-    used_footnote_ids = set()
-    section_id_map = {}
-
-    # Database transaction: delete/update/insert
+    replaced_runtime_file = False
     try:
         await db.execute("PRAGMA foreign_keys = ON;")
-        
-        # Insert or update sections
-        for sec in sections:
-            key = (
-                sec["chapter_code"] or "",
-                sec["part_code"] or "",
-                sec["division_code"] or "",
-                sec["section_code"] or ""
-            )
-            
-            if key in sec_lookup:
-                final_sec_id = sec_lookup[key]["id"]
-                review_status = sec_lookup[key]["review_status"]
-                
-                # Update existing section
-                await db.execute(
-                    """
-                    UPDATE sections SET
-                        chapter_heading = ?, part_code = ?, part_heading = ?,
-                        division_code = ?, division_heading = ?, section_heading = ?,
-                        start_page = ?, end_page = ?, html_content = ?, plain_text = ?,
-                        sort_order = ?, review_status = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        sec["chapter_heading"], sec["part_code"], sec["part_heading"],
-                        sec["division_code"], sec["division_heading"], sec["section_heading"],
-                        sec["start_page"], sec["end_page"], sec["html_content"], sec["plain_text"],
-                        sec["sort_order"], review_status, final_sec_id
-                    )
-                )
-            else:
-                final_sec_id = sec["id"]
-                
-                # Insert new section
-                await db.execute(
-                    """
-                    INSERT INTO sections (
-                        id, document_id, chapter_code, chapter_heading, part_code, part_heading,
-                        division_code, division_heading, section_code, section_heading,
-                        start_page, end_page, html_content, plain_text, sort_order, review_status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        final_sec_id, document_id, sec["chapter_code"], sec["chapter_heading"],
-                        sec["part_code"], sec["part_heading"], sec["division_code"], sec["division_heading"],
-                        sec["section_code"], sec["section_heading"], sec["start_page"], sec["end_page"],
-                        sec["html_content"], sec["plain_text"], sec["sort_order"], "pending"
-                    )
-                )
-                
-            section_id_map[sec["id"]] = final_sec_id
-            used_section_ids.add(final_sec_id)
-
-        # Insert or update footnotes
-        for fn in footnotes:
-            parsed_sec_id = fn["section_id"]
-            resolved_sec_id = section_id_map.get(parsed_sec_id)
-            if not resolved_sec_id:
-                continue
-                
-            key = (resolved_sec_id, fn["marker"])
-            if key in fn_lookup:
-                final_fn_id = fn_lookup[key]["id"]
-                review_status = fn_lookup[key]["review_status"]
-                
-                # Update existing footnote
-                await db.execute(
-                    """
-                    UPDATE footnotes SET
-                        section_id = ?, page = ?, text = ?, html_content = ?, review_status = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        resolved_sec_id, fn["page"], fn["text"], fn.get("html_content", ""),
-                        review_status, final_fn_id
-                    )
-                )
-            else:
-                final_fn_id = fn["id"]
-                
-                # Insert new footnote
-                await db.execute(
-                    """
-                    INSERT INTO footnotes (id, section_id, marker, page, text, html_content, review_status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        final_fn_id, resolved_sec_id, fn["marker"], fn["page"], fn["text"],
-                        fn.get("html_content", ""), "pending"
-                    )
-                )
-                
-            used_footnote_ids.add(final_fn_id)
-
-        # Delete sections that are no longer present
-        existing_sec_ids = {row["id"] for row in existing_sections_rows}
-        sec_ids_to_delete = existing_sec_ids - used_section_ids
-        for s_id in sec_ids_to_delete:
-            await db.execute("DELETE FROM sections WHERE id = ?", (s_id,))
-
-        # Delete footnotes that are no longer present
-        existing_fn_ids = {row["id"] for row in existing_footnotes_rows}
-        fn_ids_to_delete = existing_fn_ids - used_footnote_ids
-        for f_id in fn_ids_to_delete:
-            await db.execute("DELETE FROM footnotes WHERE id = ?", (f_id,))
-
-        # Recalculate document status and metrics
-        query_stats = """
-            SELECT 
-                COUNT(*) as total,
-                COUNT(CASE WHEN review_status = 'pending' THEN 1 END) as pending,
-                COUNT(CASE WHEN review_status = 'approved' THEN 1 END) as approved,
-                COUNT(CASE WHEN review_status = 'has_issues' THEN 1 END) as has_issues
-            FROM sections
-            WHERE document_id = ?
-        """
-        async with db.execute(query_stats, (document_id,)) as cursor:
-            stats_row = await cursor.fetchone()
-            
-        total_count = stats_row["total"]
-        pending_count = stats_row["pending"]
-        approved_count = stats_row["approved"]
-        has_issues_count = stats_row["has_issues"]
-        reviewed_count = total_count - pending_count
-
-        if pending_count == 0:
-            doc_status = "completed"
-        elif pending_count == total_count:
-            doc_status = "pending"
-        else:
-            doc_status = "in_progress"
-
-        # Update document metadata
+        stats = await apply_parsed_document(
+            db,
+            document_id,
+            sections,
+            footnotes,
+        )
+        doc_status = document_status(stats)
         await db.execute(
             "UPDATE documents SET total_sections = ?, status = ? WHERE id = ?",
-            (total_sections, doc_status, document_id)
+            (stats["total"], doc_status, document_id),
         )
-        
+        os.replace(staged_path, json_path)
+        replaced_runtime_file = True
         await db.commit()
+    except ReviewConflict as conflict:
+        await db.rollback()
+        if os.path.exists(staged_path):
+            os.remove(staged_path)
+        raise HTTPException(status_code=409, detail=str(conflict))
     except Exception as e:
         await db.rollback()
+        if os.path.exists(staged_path):
+            os.remove(staged_path)
+        if previous_bytes is not None:
+            with open(json_path, "wb") as previous_file:
+                previous_file.write(previous_bytes)
+        elif replaced_runtime_file and os.path.exists(json_path):
+            os.remove(json_path)
         raise HTTPException(status_code=500, detail=f"Database update failed: {e}")
 
     return DocumentResponse(
         id=document_id,
-        name=name,
-        pdf_filename=pdf_filename,
-        json_filename=json_filename,
-        total_sections=total_sections,
-        total_pages=total_pages,
-        uploaded_at=uploaded_at,
+        name=r["name"],
+        pdf_filename=r["pdf_filename"],
+        json_filename=r["json_filename"],
+        total_sections=stats["total"],
+        total_pages=r["total_pages"],
+        uploaded_at=r["uploaded_at"],
         status=doc_status,
+        source_type=r["source_type"],
+        source_key=r["source_key"],
         stats=DocumentStats(
-            reviewed=reviewed_count,
-            approved=approved_count,
-            has_issues=has_issues_count,
-            pending=pending_count
+            reviewed=stats["reviewed"],
+            approved=stats["approved"],
+            has_issues=stats["has_issues"],
+            pending=stats["pending"],
         )
     )
-
-

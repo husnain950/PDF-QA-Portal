@@ -2,7 +2,6 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, AlertTriangle, ArrowLeft, ArrowRight, Loader2, Clock } from 'lucide-react';
 import { useDocumentStore } from '../../stores/documentStore';
-import { useReviewStore } from '../../stores/reviewStore';
 
 const ReviewToolbar = () => {
     const navigate = useNavigate();
@@ -10,11 +9,9 @@ const ReviewToolbar = () => {
         activeDocument, 
         sections, 
         activeSection, 
-        fetchSection, 
         updateSectionStatus,
         loading 
     } = useDocumentStore();
-    const { setCurrentPage } = useReviewStore();
 
     if (!activeSection) return null;
 

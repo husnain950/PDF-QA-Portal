@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-// Set up worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 // Hook to load the PDF document once
 export const usePdfDocument = (pdfUrl) => {
@@ -19,13 +19,16 @@ export const usePdfDocument = (pdfUrl) => {
         }
 
         let isCancelled = false;
+        let loadedDocument = null;
+        let loadingTask = null;
 
         const loadPdf = async () => {
             setLoading(true);
             setError(null);
             try {
-                const loadingTask = pdfjsLib.getDocument({ url: pdfUrl });
+                loadingTask = pdfjsLib.getDocument({ url: pdfUrl });
                 const pdf = await loadingTask.promise;
+                loadedDocument = pdf;
                 if (!isCancelled) {
                     setPdfDoc(pdf);
                     setNumPages(pdf.numPages);
@@ -46,12 +49,14 @@ export const usePdfDocument = (pdfUrl) => {
 
         return () => {
             isCancelled = true;
-            if (pdfDoc) {
-                if (typeof pdfDoc.destroy === 'function') {
-                    pdfDoc.destroy();
-                } else if (typeof pdfDoc.cleanup === 'function') {
-                    pdfDoc.cleanup();
+            if (loadedDocument) {
+                if (typeof loadedDocument.destroy === 'function') {
+                    loadedDocument.destroy();
+                } else if (typeof loadedDocument.cleanup === 'function') {
+                    loadedDocument.cleanup();
                 }
+            } else if (loadingTask && typeof loadingTask.destroy === 'function') {
+                loadingTask.destroy();
             }
             setPdfDoc(null);
         };
@@ -134,4 +139,3 @@ export const usePdfRenderer = (pdfUrl, pageNumber, zoom, canvasRef) => {
         numPages
     };
 };
-

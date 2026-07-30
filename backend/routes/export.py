@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse, JSONResponse
-import aiosqlite
-import json
 import csv
 import io
 from datetime import datetime
+
+import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.database import get_db
 
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/documents", tags=["export"])
 @router.get("/{document_id}/export")
 async def export_qa_report(
     document_id: str,
-    format: str = Query("json", regex="^(json|csv)$"),
+    format: str = Query("json", pattern="^(json|csv)$"),
     db: aiosqlite.Connection = Depends(get_db)
 ):
     # Fetch document metadata

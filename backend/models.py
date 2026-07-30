@@ -1,5 +1,6 @@
-from pydantic import BaseModel, Field
 from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 # --- Document Models ---
 
@@ -16,6 +17,8 @@ class DocumentCreate(DocumentBase):
     pass
 
 class DocumentResponse(DocumentBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     pdf_filename: str
     json_filename: str
@@ -23,10 +26,9 @@ class DocumentResponse(DocumentBase):
     total_pages: int
     uploaded_at: str
     status: str
+    source_type: str = "upload"
+    source_key: Optional[str] = None
     stats: Optional[DocumentStats] = None
-
-    class Config:
-        from_attributes = True
 
 # --- Annotation Models ---
 
@@ -49,12 +51,11 @@ class AnnotationUpdate(BaseModel):
     status: Optional[str] = None
 
 class AnnotationResponse(AnnotationBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     section_id: str
     created_at: str
-
-    class Config:
-        from_attributes = True
 
 # --- Footnote Models ---
 
@@ -64,13 +65,12 @@ class FootnoteBase(BaseModel):
     text: str
 
 class FootnoteResponse(FootnoteBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     section_id: str
     html_content: Optional[str] = None
     review_status: str
-
-    class Config:
-        from_attributes = True
 
 class FootnoteStatusUpdate(BaseModel):
     review_status: str # "approved" | "has_issues" | "pending"
@@ -78,6 +78,8 @@ class FootnoteStatusUpdate(BaseModel):
 # --- Section Models ---
 
 class SectionMetadataResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     document_id: str
     chapter_code: Optional[str] = None
@@ -94,16 +96,10 @@ class SectionMetadataResponse(BaseModel):
     annotation_count: int
     sort_order: int
 
-    class Config:
-        from_attributes = True
-
 class SectionResponse(SectionMetadataResponse):
     html_content: Optional[str] = None
     plain_text: Optional[str] = None
     footnotes: List[FootnoteResponse] = []
-
-    class Config:
-        from_attributes = True
 
 class SectionStatusUpdate(BaseModel):
     review_status: str # "approved" | "has_issues" | "pending"

@@ -1,8 +1,9 @@
+import uuid
+from datetime import datetime
+
+import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
-from datetime import datetime
-import uuid
-import aiosqlite
 
 from backend.database import get_db
 from backend.models import AnnotationCreate, AnnotationResponse, AnnotationUpdate

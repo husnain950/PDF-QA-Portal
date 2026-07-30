@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-import aiosqlite
 import re
+
+import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.database import get_db
 from backend.models import SearchResultResponse

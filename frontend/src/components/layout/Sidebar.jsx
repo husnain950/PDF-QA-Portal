@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, FileText, AlertTriangle, Trash2, CheckCircle } from 'lucide-react';
+import { Search, Trash2 } from 'lucide-react';
 import { useUiStore } from '../../stores/uiStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useReviewStore } from '../../stores/reviewStore';
@@ -11,7 +11,6 @@ const Sidebar = ({ documentId }) => {
     const { 
         sections, 
         activeSection, 
-        fetchSection, 
         searchResults, 
         search, 
         clearSearch,
@@ -22,13 +21,14 @@ const Sidebar = ({ documentId }) => {
         fetchGlobalAnnotations, 
         toggleAnnotationStatus, 
         deleteAnnotation, 
-        setCurrentPage,
         viewMode,
         setViewMode
     } = useReviewStore();
     
     const [localQuery, setLocalQuery] = useState('');
+    const [tocQuery, setTocQuery] = useState('');
     const [issuesSubTab, setIssuesSubTab] = useState('open');
+    const sidebarRef = useRef(null);
 
     const openIssues = globalAnnotations.filter(a => a.status === 'open');
     const resolvedIssues = globalAnnotations.filter(a => a.status === 'resolved');
@@ -53,6 +53,26 @@ const Sidebar = ({ documentId }) => {
         return () => clearTimeout(delay);
     }, [localQuery, documentId, search, clearSearch]);
 
+    useEffect(() => {
+        const activeNode = sidebarRef.current?.querySelector(
+            '.toc-node.level-section.active',
+        );
+        activeNode?.scrollIntoView({ block: 'center' });
+    }, [activeSection?.id, tocQuery, sidebarTab]);
+
+    useEffect(() => {
+        const focusFilter = (event) => {
+            const tagName = document.activeElement?.tagName;
+            const isTyping = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName);
+            if (event.key === '/' && !isTyping && sidebarTab === 'toc') {
+                event.preventDefault();
+                sidebarRef.current?.querySelector('#toc-filter')?.focus();
+            }
+        };
+        document.addEventListener('keydown', focusFilter);
+        return () => document.removeEventListener('keydown', focusFilter);
+    }, [sidebarTab]);
+
     const handleSectionClick = (secId) => {
         if (viewMode === 'page') {
             setViewMode('section');
@@ -66,12 +86,31 @@ const Sidebar = ({ documentId }) => {
             return <div className="p-4" style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>No sections found.</div>;
         }
 
+        const normalizedQuery = tocQuery.trim().toLocaleLowerCase();
+        const visibleSections = sections.filter((section) => {
+            if (!normalizedQuery) return true;
+            return [
+                section.section_code,
+                section.section_heading,
+                section.chapter_code,
+                section.chapter_heading,
+                section.part_code,
+                section.part_heading,
+                section.division_code,
+                section.division_heading,
+            ]
+                .filter(Boolean)
+                .join(' ')
+                .toLocaleLowerCase()
+                .includes(normalizedQuery);
+        });
+
         let lastChapter = null;
         let lastPart = null;
         let lastDivision = null;
         
         const nodes = [];
-        sections.forEach((sec) => {
+        visibleSections.forEach((sec) => {
             if (sec.chapter_code !== lastChapter) {
                 lastChapter = sec.chapter_code;
                 lastPart = null;
@@ -129,11 +168,37 @@ const Sidebar = ({ documentId }) => {
             );
         });
 
-        return <div className="toc-tree">{nodes}</div>;
+        return (
+            <>
+                <div className="toc-filter-wrap">
+                    <label htmlFor="toc-filter" className="toc-filter">
+                        <Search size={15} aria-hidden="true" />
+                        <span className="sr-only">Filter sections</span>
+                        <input
+                            id="toc-filter"
+                            type="search"
+                            value={tocQuery}
+                            onChange={(event) => setTocQuery(event.target.value)}
+                            placeholder="Number or heading…"
+                            autoComplete="off"
+                        />
+                    </label>
+                    <div className="toc-filter-meta">
+                        <span>{visibleSections.length.toLocaleString()} sections</span>
+                        <span><kbd>/</kbd> filter · <kbd>J</kbd>/<kbd>K</kbd> move</span>
+                    </div>
+                </div>
+                <div className="toc-tree">
+                    {nodes.length > 0 ? nodes : (
+                        <div className="toc-empty">No matching sections.</div>
+                    )}
+                </div>
+            </>
+        );
     };
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div ref={sidebarRef} style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             {/* Tabs */}
             <div className="toc-tabs">
                 <button 

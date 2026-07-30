@@ -2,11 +2,15 @@ import { create } from 'zustand';
 
 const getInitialTheme = () => {
     if (typeof window !== 'undefined') {
-        const storedTheme = localStorage.getItem('qa-portal-theme');
-        if (storedTheme) return storedTheme;
-        
-        const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-        return systemPrefersDark ? 'dark' : 'light';
+        try {
+            const storedTheme = window.localStorage?.getItem('qa-portal-theme');
+            if (storedTheme) return storedTheme;
+            
+            const systemPrefersDark = window.matchMedia?.('(prefers-color-scheme: dark)')?.matches;
+            return systemPrefersDark ? 'dark' : 'light';
+        } catch (e) {
+            return 'light';
+        }
     }
     return 'light';
 };
@@ -27,8 +31,12 @@ export const useUiStore = create((set) => {
 
         toggleTheme: () => set((state) => {
             const newTheme = state.theme === 'light' ? 'dark' : 'light';
-            localStorage.setItem('qa-portal-theme', newTheme);
-            document.documentElement.setAttribute('data-theme', newTheme);
+            try {
+                window.localStorage?.setItem('qa-portal-theme', newTheme);
+            } catch (e) {}
+            if (typeof document !== 'undefined') {
+                document.documentElement.setAttribute('data-theme', newTheme);
+            }
             return { theme: newTheme };
         }),
 

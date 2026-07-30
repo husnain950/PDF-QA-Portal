@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
 import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.database import get_db
 from backend.models import FootnoteStatusUpdate
@@ -41,10 +41,44 @@ async def update_footnote_status(
                 (section_id,)
             )
 
-        # Set document status to "in_progress"
+        # Recalculate document progress so reverting the last reviewed footnote
+        # also restores the document's previous pending state.
+        async with db.execute(
+            """
+            SELECT
+                COUNT(*) AS total_sections,
+                SUM(CASE WHEN review_status = 'pending' THEN 1 ELSE 0 END)
+                    AS pending_sections
+            FROM sections
+            WHERE document_id = ?
+            """,
+            (doc_id,),
+        ) as cursor:
+            section_stats = await cursor.fetchone()
+        async with db.execute(
+            """
+            SELECT COUNT(*) AS reviewed_footnotes
+            FROM footnotes f
+            JOIN sections s ON s.id = f.section_id
+            WHERE s.document_id = ? AND f.review_status != 'pending'
+            """,
+            (doc_id,),
+        ) as cursor:
+            footnote_stats = await cursor.fetchone()
+
+        total_sections = section_stats["total_sections"]
+        pending_sections = section_stats["pending_sections"] or 0
+        reviewed_footnotes = footnote_stats["reviewed_footnotes"]
+        if pending_sections == 0 and total_sections:
+            document_status = "completed"
+        elif pending_sections == total_sections and reviewed_footnotes == 0:
+            document_status = "pending"
+        else:
+            document_status = "in_progress"
+
         await db.execute(
-            "UPDATE documents SET status = 'in_progress' WHERE id = ? AND status != 'in_progress'",
-            (doc_id,)
+            "UPDATE documents SET status = ? WHERE id = ?",
+            (document_status, doc_id),
         )
 
         await db.commit()

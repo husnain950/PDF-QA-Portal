@@ -42,7 +42,7 @@ const AppShell = ({
                         <span>PDF-QA Portal</span>
                     </div>
                     {title && (
-                        <div style={{ marginLeft: 24, fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
+                        <div className="app-title" style={{ marginLeft: 24, fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>
                             {title}
                         </div>
                     )}

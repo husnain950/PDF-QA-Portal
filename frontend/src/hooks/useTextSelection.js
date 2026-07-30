@@ -21,7 +21,7 @@ export const useTextSelection = (containerRef, onSelectionComplete) => {
     const [offsets, setOffsets] = useState({ start: 0, end: 0 });
 
     useEffect(() => {
-        const handleMouseUp = (e) => {
+        const handleMouseUp = () => {
             const container = containerRef.current;
             if (!container) return;
 

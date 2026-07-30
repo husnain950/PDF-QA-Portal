@@ -3,14 +3,14 @@ import { useTextSelection } from '../../hooks/useTextSelection';
 import { useReviewStore } from '../../stores/reviewStore';
 import AnnotationPopover from '../annotations/AnnotationPopover';
 import FootnotePanel from '../footnotes/FootnotePanel';
-import { Copy, Check, Code, Eye } from 'lucide-react';
+import { Copy, Check, Code, Eye, AlignLeft } from 'lucide-react';
 
 const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
     const containerRef = useRef(null);
     const { annotations, createAnnotation, fetchAnnotations } = useReviewStore();
     const [popoverCoords, setPopoverCoords] = useState(null);
     const [selectionData, setSelectionData] = useState(null);
-    const [paneMode, setPaneMode] = useState('rendered'); // 'rendered', 'html', 'json'
+    const [paneMode, setPaneMode] = useState('rendered');
     const [copied, setCopied] = useState(false);
     const [hoverFootnote, setHoverFootnote] = useState(null);
     const [clickFootnote, setClickFootnote] = useState(null);
@@ -46,7 +46,7 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                 cite.removeAttribute('title'); // Disable default slow native browser tooltip
             }
             
-            const handleMouseEnter = (e) => {
+            const handleMouseEnter = () => {
                 const text = cite.getAttribute('data-footnote-text') || '';
                 const rect = cite.getBoundingClientRect();
                 const containerRect = container.getBoundingClientRect();
@@ -123,7 +123,7 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                 
                 try {
                     range.surroundContents(mark);
-                } catch (e) {
+                } catch {
                     // Fallback if cross-element selection
                     try {
                         const content = range.extractContents();
@@ -206,6 +206,8 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
         if (paneMode === 'json') {
             const sectionData = section || { id: sectionId, html_content: htmlContent, footnotes };
             textToCopy = JSON.stringify(sectionData, null, 2);
+        } else if (paneMode === 'plain') {
+            textToCopy = section?.plain_text || '';
         } else {
             textToCopy = htmlContent;
         }
@@ -268,11 +270,15 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                 <div className="flex flex-col">
                     <span className="panel-title">
                         {paneMode === 'rendered' && 'Parsed HTML Content'}
+                        {paneMode === 'plain' && 'Extracted Plain Text'}
                         {paneMode === 'html' && 'Raw HTML Markup'}
                         {paneMode === 'json' && 'Raw Section JSON'}
                     </span>
                     <span style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-                        {paneMode === 'rendered' ? 'Highlight text in this pane to report discrepancies' : paneMode === 'html' ? 'Viewing raw HTML markup code' : 'Viewing raw JSON data for this section'}
+                        {paneMode === 'rendered' && 'Highlight text in this pane to report discrepancies'}
+                        {paneMode === 'plain' && 'Viewing punctuation-faithful extracted text'}
+                        {paneMode === 'html' && 'Viewing raw HTML markup code'}
+                        {paneMode === 'json' && 'Viewing raw JSON data for this section'}
                     </span>
                 </div>
                 <div className="flex align-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -284,6 +290,15 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                     >
                         <Eye size={14} />
                         <span>Rendered</span>
+                    </button>
+                    <button
+                        className={`btn ${paneMode === 'plain' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                        onClick={() => setPaneMode('plain')}
+                        title="Switch to Plain Text View"
+                    >
+                        <AlignLeft size={14} />
+                        <span>Plain Text</span>
                     </button>
                     <button 
                         className={`btn ${paneMode === 'html' ? 'btn-primary' : 'btn-secondary'}`}
@@ -307,10 +322,18 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                         className="btn btn-secondary"
                         style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
                         onClick={handleCopyContent}
-                        title={paneMode === 'json' ? "Copy raw JSON to clipboard" : "Copy raw HTML to clipboard"}
+                        title={`Copy ${paneMode === 'json' ? 'JSON' : paneMode === 'plain' ? 'plain text' : 'HTML'} to clipboard`}
                     >
                         {copied ? <Check size={14} style={{ color: 'var(--color-success)' }} /> : <Copy size={14} />}
-                        <span>{copied ? 'Copied!' : paneMode === 'json' ? 'Copy JSON' : 'Copy HTML'}</span>
+                        <span>
+                            {copied
+                                ? 'Copied!'
+                                : paneMode === 'json'
+                                    ? 'Copy JSON'
+                                    : paneMode === 'plain'
+                                        ? 'Copy Text'
+                                        : 'Copy HTML'}
+                        </span>
                     </button>
                 </div>
             </div>
@@ -322,6 +345,14 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                     style={{ display: paneMode === 'rendered' ? 'block' : 'none' }}
                     onClick={(e) => e.stopPropagation()} // Stop bubble up to prevent clearing selection
                 />
+
+                {paneMode === 'plain' && (
+                    <div className="html-renderer-container raw-mode">
+                        <pre className="plain-text-view">
+                            {section?.plain_text || ''}
+                        </pre>
+                    </div>
+                )}
 
                 {paneMode === 'html' && (
                     <div className="html-renderer-container raw-mode" style={{ padding: 24 }}>

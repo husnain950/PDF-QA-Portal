@@ -33,7 +33,7 @@ const ReviewPage = () => {
             return;
         }
 
-        const confirmMsg = `Are you sure you want to replace the JSON parsed structure for this document?\n\nWARNING: This will replace all sections and footnotes. Existing annotations and review statuses will be reset.`;
+        const confirmMsg = `Replace the parsed JSON structure for this document?\n\nStable sections keep their QA state. The portal will stop the replacement if it would remove annotated or reviewed evidence.`;
         if (!window.confirm(confirmMsg)) {
             e.target.value = '';
             return;
@@ -53,7 +53,7 @@ const ReviewPage = () => {
             await fetchDocument(documentId);
             await fetchSections(documentId);
             
-            setSuccessMessage('JSON structure replaced successfully! All sections have been re-parsed.');
+            setSuccessMessage('JSON structure replaced safely. Stable QA state was preserved.');
             setTimeout(() => setSuccessMessage(''), 6000);
         } catch (err) {
             alert('Failed to replace JSON: ' + (err.message || 'Unknown error'));
@@ -72,23 +72,40 @@ const ReviewPage = () => {
         fetchSections, 
         fetchSection,
         fetchSectionsByPage,
-        loading 
     } = useDocumentStore();
 
     const { currentPage, viewMode, setViewMode, setCurrentPage } = useReviewStore();
     const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState('');
+    const currentSectionIndex = sections.findIndex(
+        (section) => section.id === activeSection?.id,
+    );
 
-    // Wire keyboard navigation for arrow keys
+    const navigateBySection = (offset) => {
+        if (viewMode !== 'section' || currentSectionIndex < 0) return;
+        const target = sections[currentSectionIndex + offset];
+        if (target) {
+            navigate(`/review/${documentId}/${target.id}`);
+        }
+    };
+
     useKeyboardNav({
         onArrowLeft: () => {
-            if (currentPage > 1) setCurrentPage(currentPage - 1);
+            if (viewMode === 'page' && currentPage > 1) {
+                setCurrentPage(currentPage - 1);
+            }
         },
         onArrowRight: () => {
-            if (activeDocument && currentPage < activeDocument.total_pages) {
+            if (
+                viewMode === 'page'
+                && activeDocument
+                && currentPage < activeDocument.total_pages
+            ) {
                 setCurrentPage(currentPage + 1);
             }
-        }
+        },
+        onPreviousSection: () => navigateBySection(-1),
+        onNextSection: () => navigateBySection(1),
     });
 
     useEffect(() => {
@@ -232,16 +249,18 @@ const ReviewPage = () => {
         : '';
 
     const actions = (
-        <div className="flex align-center gap-3">
-            <button
-                className="btn btn-secondary"
-                style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}
-                onClick={() => replaceJsonInputRef.current && replaceJsonInputRef.current.click()}
-                title="Replace parsed JSON structure for this document"
-            >
-                <Upload size={14} />
-                <span>Replace JSON</span>
-            </button>
+        <div className="review-header-actions flex align-center gap-3">
+            {activeDocument.source_type !== 'acts_corpus' && (
+                <button
+                    className="replace-json-action btn btn-secondary"
+                    style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}
+                    onClick={() => replaceJsonInputRef.current && replaceJsonInputRef.current.click()}
+                    title="Replace parsed JSON structure for this document"
+                >
+                    <Upload size={14} />
+                    <span>Replace JSON</span>
+                </button>
+            )}
 
             <div className="flex align-center gap-2">
                 <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>View:</span>
@@ -328,7 +347,33 @@ const ReviewPage = () => {
             )}
 
             {viewMode === 'section' && activeSection && (
-                <Breadcrumbs section={activeSection} />
+                <>
+                    <Breadcrumbs section={activeSection} />
+                    <div className="section-facts-bar" aria-label="Section facts">
+                        <span>
+                            Section <strong>{currentSectionIndex + 1}</strong> of{' '}
+                            <strong>{sections.length}</strong>
+                        </span>
+                        <span>
+                            Source pages{' '}
+                            <strong>
+                                {activeSection.start_page}
+                                {activeSection.end_page !== activeSection.start_page
+                                    ? `–${activeSection.end_page}`
+                                    : ''}
+                            </strong>
+                        </span>
+                        <span>
+                            <strong>
+                                {(activeSection.plain_text || '').length.toLocaleString()}
+                            </strong>{' '}
+                            extracted characters
+                        </span>
+                        <span className="shortcut-hint">
+                            <kbd>J</kbd>/<kbd>K</kbd> section · <kbd>[</kbd>/<kbd>]</kbd> page
+                        </span>
+                    </div>
+                </>
             )}
             {viewMode === 'page' && pageSections.length > 0 && (
                 <Breadcrumbs section={pageSections[0]} />

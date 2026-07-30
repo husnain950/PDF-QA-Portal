@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status
 import aiosqlite
+from fastapi import APIRouter, Depends, HTTPException
 
 from backend.database import get_db
 from backend.models import (
+    FootnoteResponse,
     SectionMetadataResponse,
     SectionResponse,
     SectionStatusUpdate,
-    FootnoteResponse
 )
 
 router = APIRouter(prefix="/documents", tags=["sections"])

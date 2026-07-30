@@ -1,13 +1,14 @@
+import asyncio
 import os
 import shutil
 import uuid
-import asyncio
 from datetime import datetime
+
 import aiosqlite
 
-from backend.database import get_db, init_db, DB_PATH
-from backend.services.pdf_service import get_pdf_page_count
+from backend.database import DB_PATH, init_db
 from backend.services.json_parser import parse_json_document
+from backend.services.pdf_service import get_pdf_page_count
 
 PDF_SOURCE = "Assets/Income Tax Ordinance, 2001 Amended upto 30-06-2018.pdf"
 JSON_SOURCE = "Assets/ordinance-2018-enriched.json"
@@ -43,7 +44,10 @@ async def seed():
     print("Parsing and flattening enriched JSON...")
     with open(json_dest, "r", encoding="utf-8") as f:
         json_content = f.read()
-    sections, footnotes = parse_json_document(json_content)
+    sections, footnotes = parse_json_document(
+        json_content,
+        document_id=doc_id,
+    )
 
     total_sections = len(sections)
     uploaded_at = datetime.utcnow().isoformat() + "Z"
@@ -62,10 +66,25 @@ async def seed():
         print("Inserting document record...")
         await db.execute(
             """
-            INSERT INTO documents (id, name, pdf_filename, json_filename, total_sections, total_pages, uploaded_at, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO documents (
+                id, name, pdf_filename, json_filename, total_sections,
+                total_pages, uploaded_at, status, source_type, source_key,
+                source_hash
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (doc_id, "Income Tax Ordinance, 2001 (Amended 2018)", pdf_filename, json_filename, total_sections, total_pages, uploaded_at, "pending")
+            (
+                doc_id,
+                "Income Tax Ordinance, 2001 (Amended 2018)",
+                pdf_filename,
+                json_filename,
+                total_sections,
+                total_pages,
+                uploaded_at,
+                "pending",
+                "upload",
+                None,
+                None,
+            ),
         )
 
         print(f"Inserting {total_sections} sections...")
@@ -75,14 +94,16 @@ async def seed():
                 INSERT INTO sections (
                     id, document_id, chapter_code, chapter_heading, part_code, part_heading,
                     division_code, division_heading, section_code, section_heading,
-                    start_page, end_page, html_content, plain_text, sort_order, review_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    start_page, end_page, html_content, plain_text, sort_order,
+                    review_status, source_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     sec["id"], doc_id, sec["chapter_code"], sec["chapter_heading"],
                     sec["part_code"], sec["part_heading"], sec["division_code"], sec["division_heading"],
                     sec["section_code"], sec["section_heading"], sec["start_page"], sec["end_page"],
-                    sec["html_content"], sec["plain_text"], sec["sort_order"], sec["review_status"]
+                    sec["html_content"], sec["plain_text"], sec["sort_order"],
+                    sec["review_status"], sec["source_key"]
                 )
             )
 
@@ -106,7 +127,7 @@ async def seed():
 
     print("=" * 60)
     print("DATABASE SEEDING SUCCESSFUL!")
-    print(f"Document Name: Income Tax Ordinance, 2001 (Amended 2018)")
+    print("Document Name: Income Tax Ordinance, 2001 (Amended 2018)")
     print(f"Sections Inserted: {total_sections}")
     print(f"Footnotes Inserted: {len(footnotes)}")
     print(f"PDF Pages: {total_pages}")

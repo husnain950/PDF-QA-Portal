@@ -96,6 +96,7 @@ export const useReviewStore = create((set, get) => ({
                 const docStore = useDocumentStore.getState();
                 docStore.fetchSection(docStore.activeDocument.id, deleted.section_id);
                 docStore.fetchSections(docStore.activeDocument.id);
+                docStore.fetchDocument(docStore.activeDocument.id);
             }
         } catch (e) {
             console.error('Failed to delete annotation', e);

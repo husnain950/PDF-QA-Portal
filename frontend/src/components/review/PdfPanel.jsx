@@ -1,5 +1,5 @@
-import React, { useRef } from 'react';
-import { ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { ZoomIn, ZoomOut, Maximize2, ChevronLeft, ChevronRight, Loader2, ExternalLink } from 'lucide-react';
 import { usePdfDocument, usePdfPageRenderer } from '../../hooks/usePdfRenderer';
 import { useUiStore } from '../../stores/uiStore';
 import { useReviewStore } from '../../stores/reviewStore';
@@ -51,31 +51,53 @@ const PdfPanel = ({ pdfUrl }) => {
     const isSectionView = viewMode === 'section' && activeSection;
     const startPage = isSectionView ? (activeSection.start_page || 1) : currentPage;
     const endPage = isSectionView ? (activeSection.end_page || startPage) : currentPage;
+    const displayedPage = Math.max(
+        startPage,
+        Math.min(currentPage || startPage, endPage),
+    );
+    const pagesToRender = pdfDoc && displayedPage <= numPages
+        ? [displayedPage]
+        : [];
 
-    const pagesToRender = [];
-    if (pdfDoc) {
-        for (let i = startPage; i <= endPage; i++) {
-            if (i >= 1 && i <= numPages) {
-                pagesToRender.push(i);
-            }
+    useEffect(() => {
+        if (isSectionView && currentPage !== displayedPage) {
+            setCurrentPage(displayedPage);
         }
-    }
+    }, [currentPage, displayedPage, isSectionView, setCurrentPage]);
 
     const handlePrevPage = () => {
-        if (!isSectionView && currentPage > 1) {
-            setCurrentPage(currentPage - 1);
+        const lowerBound = isSectionView ? startPage : 1;
+        if (displayedPage > lowerBound) {
+            setCurrentPage(displayedPage - 1);
         }
     };
 
     const handleNextPage = () => {
-        if (!isSectionView && currentPage < numPages) {
-            setCurrentPage(currentPage + 1);
+        const upperBound = isSectionView ? endPage : numPages;
+        if (displayedPage < upperBound) {
+            setCurrentPage(displayedPage + 1);
         }
     };
 
     const pageDisplayText = isSectionView
-        ? (startPage === endPage ? `Page ${startPage} of ${numPages || '...'}` : `Pages ${startPage}–${endPage} of ${numPages || '...'}`)
-        : `Page ${currentPage} of ${numPages || '...'}`;
+        ? `Page ${displayedPage} · range ${startPage}–${endPage}`
+        : `Page ${displayedPage} of ${numPages || '...'}`;
+
+    useEffect(() => {
+        const handlePageShortcut = (event) => {
+            const tagName = document.activeElement?.tagName;
+            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tagName)) return;
+            if (event.key === '[') {
+                event.preventDefault();
+                handlePrevPage();
+            } else if (event.key === ']') {
+                event.preventDefault();
+                handleNextPage();
+            }
+        };
+        document.addEventListener('keydown', handlePageShortcut);
+        return () => document.removeEventListener('keydown', handlePageShortcut);
+    });
 
     return (
         <div className="flex flex-col height-100" style={{ height: '100%' }}>
@@ -88,22 +110,46 @@ const PdfPanel = ({ pdfUrl }) => {
                     <button 
                         className="btn btn-secondary btn-icon"
                         onClick={handlePrevPage}
-                        disabled={isSectionView || currentPage <= 1 || docLoading}
-                        title={isSectionView ? "Disabled in Section View" : "Previous PDF Page"}
+                        disabled={displayedPage <= (isSectionView ? startPage : 1) || docLoading}
+                        title="Previous PDF Page ([)"
                     >
                         <ChevronLeft size={16} />
                     </button>
-                    <span style={{ fontSize: '0.85rem', fontWeight: 600, minWidth: 100, textAlign: 'center' }}>
-                        {pageDisplayText}
-                    </span>
+                    {isSectionView && startPage !== endPage ? (
+                        <select
+                            className="pdf-page-select"
+                            value={displayedPage}
+                            onChange={(event) => setCurrentPage(Number(event.target.value))}
+                            aria-label="PDF page within section"
+                        >
+                            {Array.from(
+                                { length: endPage - startPage + 1 },
+                                (_, index) => startPage + index,
+                            ).map((page) => (
+                                <option key={page} value={page}>Page {page}</option>
+                            ))}
+                        </select>
+                    ) : (
+                        <span className="pdf-page-label">{pageDisplayText}</span>
+                    )}
                     <button 
                         className="btn btn-secondary btn-icon"
                         onClick={handleNextPage}
-                        disabled={isSectionView || currentPage >= numPages || docLoading}
-                        title={isSectionView ? "Disabled in Section View" : "Next PDF Page"}
+                        disabled={displayedPage >= (isSectionView ? endPage : numPages) || docLoading}
+                        title="Next PDF Page (])"
                     >
                         <ChevronRight size={16} />
                     </button>
+                    <a
+                        className="btn btn-secondary btn-icon"
+                        href={`${pdfUrl}#page=${displayedPage}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open this page in the complete PDF"
+                        aria-label="Open page in complete PDF"
+                    >
+                        <ExternalLink size={15} />
+                    </a>
                 </div>
 
                 {/* Zoom Controls */}
@@ -169,4 +215,3 @@ const PdfPanel = ({ pdfUrl }) => {
 };
 
 export default PdfPanel;
-
