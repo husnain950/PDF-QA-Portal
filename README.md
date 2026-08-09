@@ -14,6 +14,9 @@ A modern web application built to help QA teams validate PDF-to-HTML parsing pip
 - **Inline Highlights & Annotations**: Highlight any text in the HTML view and save notes/annotations.
 - **Footnote / Marker Management**: Verify inline footnote mappings page-by-page.
 - **QA Report Exporting**: Stream summary reports as downloadable JSON or CSV files.
+- **Static PDFs, versioned JSON**: the source PDF is stored once by content hash; each corrected parse lands as a new version with a leaf-level diff, a carry-over report, and one-click rollback.
+- **Pipeline health**: per-document invariant and conservation badges, read from the Acts_fbr gate rather than recomputed.
+- **Findings survive re-parses**: an annotation on a leaf the pipeline rewrote is re-anchored automatically, or flagged for recheck — it never blocks the fix and is never silently dropped.
 
 ---
 
@@ -27,32 +30,104 @@ A modern web application built to help QA teams validate PDF-to-HTML parsing pip
 
 ## Getting Started
 
-### Sync the ACT corpus
+### How a document works here
 
-The repository does not contain the Acts-Discovery corpus. The repeatable sync
-copies validated, content-addressed PDF/JSON files into ignored runtime storage
-and records source hashes in the normal SQLite database. Existing uploads and QA
-state remain intact.
+A document is **one static PDF plus an ordered history of JSON parses of it**. The PDF
+is uploaded (or synced) once and never re-sent; when the conversion pipeline is fixed,
+push only the new JSON and it becomes the next *version*. Every version records what it
+cost in review state, can be compared leaf-by-leaf against the previous one, and can be
+rolled back.
 
-Run a read-only audit first:
+Storage is content-addressed — `backend/uploads/pdf/<sha256>.pdf` and
+`backend/uploads/json/<sha256>.json` — so the same source PDF shared by several
+documents is stored once, and an unchanged JSON produces no new version at all.
+
+### Sync the ACT corpus from the Acts_fbr pipeline
+
+Point the sync straight at the pipeline repository. It pairs every corpus JSON
+(`output/*.json`) with the PDF named in its own `metadata.filename` under `Acts/**`,
+detecting PDFs by magic bytes because several corpus sources carry no `.pdf` suffix.
+
+Read-only audit first:
 
 ```bash
-backend/venv/bin/python -m backend.sync_acts \
-  --source /Users/muhammad.husnain/Documents/Claude/Projects/scratch/Cdx/Acts-Discovery/export \
+.venv/bin/python -m backend.sync_acts \
+  --acts-repo /Users/muhammad.husnain/Downloads/code/CC-FBR/Acts_fbr \
   --dry-run
 ```
 
-Then import into `backend/data` and `backend/uploads`:
+Then import:
 
 ```bash
-backend/venv/bin/python -m backend.sync_acts \
-  --source /Users/muhammad.husnain/Documents/Claude/Projects/scratch/Cdx/Acts-Discovery/export
+.venv/bin/python -m backend.sync_acts \
+  --acts-repo /Users/muhammad.husnain/Downloads/code/CC-FBR/Acts_fbr
 ```
 
-An identical second run reports every unchanged source as `skipped`. Updates
-run in one transaction per document. If a removed or changed leaf contains
-annotations, or a removed leaf has completed review state, that document update
-is rejected so evidence is not silently deleted.
+An identical second run reports every unchanged edition as `skipped`. A changed JSON
+lands as that document's next version; reviewer findings on changed leaves are
+re-anchored, findings on leaves the new parse dropped are kept as *orphaned* with a
+snapshot of what they pointed at, and the whole tally is stored on the version and shown
+in the portal's **Versions** panel.
+
+A leaf whose declared pages cannot exist in the PDF is flagged
+`page_range_out_of_bounds` rather than rejecting the edition — two live corpus editions
+carry such leaves. `--strict` restores the old all-or-nothing behaviour (abort the run
+on any problem, and refuse any ingest that would supersede reviewer state); use it in CI.
+
+The legacy `--source DIR` layout (one folder per Act, each with one PDF and one JSON) is
+still supported.
+
+### Pipeline QA metrics
+
+The portal never recomputes the pipeline's gate — it reads the numbers the pipeline
+itself produced. Generate them in the Acts_fbr repository:
+
+```bash
+# invariants + regression cases, over every edition (fast)
+python scripts/run_tests.py --json reports/qa-invariants.json
+
+# body/footnote conservation (slow: re-reads every source PDF)
+python scripts/audit_all.py --json reports/qa-conservation.json
+```
+
+Then ingest them:
+
+```bash
+.venv/bin/python -m backend.sync_acts --acts-repo <Acts_fbr> --metrics
+```
+
+Both reports are optional; a missing one is skipped, never an error. Results appear as
+per-document health badges on the dashboard and per-version metrics (plus the delta
+between versions) in the Versions panel.
+
+### Seeding storage
+
+**Source PDFs are not carried in git.** They were 163 MB of repository and they never
+change. `backend/seed_uploads/` is now ignored; populate the server's uploads volume
+once, by either:
+
+```bash
+# a) copy an existing store onto the volume
+rsync -a backend/uploads/ <server>:/path/to/backend/uploads/
+
+# b) or rebuild it from the pipeline
+.venv/bin/python -m backend.sync_acts --acts-repo <Acts_fbr>
+```
+
+Then confirm every document resolves to a readable PDF:
+
+```bash
+.venv/bin/python -m backend.audit_pdf_serving   # expects zero missing_file
+```
+
+Databases seeded from before content addressing are migrated automatically on boot; the
+same migration can be run by hand, and previews itself first:
+
+```bash
+.venv/bin/python -m backend.migrate_blobs --dry-run
+.venv/bin/python -m backend.migrate_blobs
+.venv/bin/python -m backend.migrate_blobs --prune-orphans   # optional cleanup
+```
 
 ### Option A: Run with Docker Compose
 
@@ -99,9 +174,15 @@ Open [http://127.0.0.1:5173/](http://127.0.0.1:5173/) to access the portal.
 Install the development test dependencies and run the complete checks:
 
 ```bash
-backend/venv/bin/pip install -r backend/requirements-dev.txt
-backend/venv/bin/python -m pytest -q backend/tests
-backend/venv/bin/ruff check backend
+.venv/bin/pip install -r backend/requirements-dev.txt
+.venv/bin/python -m pytest -q backend/tests
+.venv/bin/ruff check backend
+
+# module self-checks
+.venv/bin/python -m backend.services.blob_store
+.venv/bin/python -m backend.services.anchoring
+.venv/bin/python -m backend.services.versions
+.venv/bin/python -m backend.services.acts_metrics
 
 cd frontend
 npm install

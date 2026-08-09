@@ -4,6 +4,8 @@ import { Search, Trash2 } from 'lucide-react';
 import { useUiStore } from '../../stores/uiStore';
 import { useDocumentStore } from '../../stores/documentStore';
 import { useReviewStore } from '../../stores/reviewStore';
+import { formatHierarchyLabel, formatSectionLabel } from '../../utils/tocLabels';
+import { hasCriticalQualityFlags } from '../../utils/qualityFlags';
 
 const Sidebar = ({ documentId }) => {
     const navigate = useNavigate();
@@ -30,8 +32,21 @@ const Sidebar = ({ documentId }) => {
     const [issuesSubTab, setIssuesSubTab] = useState('open');
     const sidebarRef = useRef(null);
 
-    const openIssues = globalAnnotations.filter(a => a.status === 'open');
-    const resolvedIssues = globalAnnotations.filter(a => a.status === 'resolved');
+    // A finding whose leaf was rewritten or dropped by a newer JSON version. Its stored
+    // offsets no longer locate anything, so it needs a person -- it is not "resolved"
+    // and must not be quietly dropped from the list.
+    const staleIssues = globalAnnotations.filter(
+        a => a.anchor_status === 'needs_recheck' || a.anchor_status === 'orphaned',
+    );
+    const isStale = a => staleIssues.includes(a);
+    const openIssues = globalAnnotations.filter(a => a.status === 'open' && !isStale(a));
+    const resolvedIssues = globalAnnotations.filter(a => a.status === 'resolved' && !isStale(a));
+
+    const visibleIssues = issuesSubTab === 'open'
+        ? openIssues
+        : issuesSubTab === 'resolved'
+            ? resolvedIssues
+            : staleIssues;
 
     // Fetch global annotations for document
     useEffect(() => {
@@ -88,6 +103,10 @@ const Sidebar = ({ documentId }) => {
 
         const normalizedQuery = tocQuery.trim().toLocaleLowerCase();
         const visibleSections = sections.filter((section) => {
+            // Skip empty-code / empty-heading leaves (no invented p.N TOC rows).
+            if (!formatSectionLabel(section.section_code, section.section_heading, section.start_page)) {
+                return false;
+            }
             if (!normalizedQuery) return true;
             return [
                 section.section_code,
@@ -115,28 +134,41 @@ const Sidebar = ({ documentId }) => {
                 lastChapter = sec.chapter_code;
                 lastPart = null;
                 lastDivision = null;
-                nodes.push(
-                    <div key={`ch-${sec.id}`} className="toc-node level-chapter">
-                        {sec.chapter_code}: {sec.chapter_heading}
-                    </div>
+                const chapterLabel = formatHierarchyLabel(
+                    sec.chapter_code,
+                    sec.chapter_heading,
+                    sec.hierarchy_kind,
                 );
+                if (chapterLabel) {
+                    nodes.push(
+                        <div key={`ch-${sec.id}`} className="toc-node level-chapter">
+                            {chapterLabel}
+                        </div>
+                    );
+                }
             }
             if (sec.part_code && sec.part_code !== lastPart) {
                 lastPart = sec.part_code;
                 lastDivision = null;
-                nodes.push(
-                    <div key={`pt-${sec.id}`} className="toc-node level-part">
-                        {sec.part_code}: {sec.part_heading}
-                    </div>
-                );
+                const partLabel = formatHierarchyLabel(sec.part_code, sec.part_heading);
+                if (partLabel) {
+                    nodes.push(
+                        <div key={`pt-${sec.id}`} className="toc-node level-part">
+                            {partLabel}
+                        </div>
+                    );
+                }
             }
             if (sec.division_code && sec.division_code !== lastDivision) {
                 lastDivision = sec.division_code;
-                nodes.push(
-                    <div key={`div-${sec.id}`} className="toc-node level-division">
-                        {sec.division_code}: {sec.division_heading}
-                    </div>
-                );
+                const divisionLabel = formatHierarchyLabel(sec.division_code, sec.division_heading);
+                if (divisionLabel) {
+                    nodes.push(
+                        <div key={`div-${sec.id}`} className="toc-node level-division">
+                            {divisionLabel}
+                        </div>
+                    );
+                }
             }
 
             const isActive = activeSection?.id === sec.id;
@@ -144,23 +176,31 @@ const Sidebar = ({ documentId }) => {
                 <div 
                     key={`sec-${sec.id}`} 
                     className={`toc-node level-section ${isActive ? 'active' : ''}`}
-                    onClick={() => handleSectionClick(sec.id, sec.start_page)}
+                    onClick={() => handleSectionClick(sec.id)}
                 >
                     <span className="toc-node-status-container">
                         {sec.review_status === 'approved' ? (
                             <span className="toc-status-emoji">✅</span>
                         ) : sec.review_status === 'has_issues' ? (
-                            <span className="toc-status-emoji">❌</span>
+                            <span
+                                className="toc-status-emoji"
+                                title={
+                                    hasCriticalQualityFlags(sec.quality_flags)
+                                        ? 'Auto quality flag'
+                                        : 'Reviewer flagged'
+                                }
+                            >
+                                ❌
+                            </span>
                         ) : (
                             <span className={`toc-node-status ${sec.review_status || 'pending'}`} />
                         )}
                     </span>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-
-                        Section {sec.section_code}: {sec.section_heading}
+                    <span className="toc-node-label">
+                        {formatSectionLabel(sec.section_code, sec.section_heading, sec.start_page)}
                     </span>
                     {sec.annotation_count > 0 && (
-                        <span style={{ fontSize: '0.7rem', padding: '1px 5px', borderRadius: 4, backgroundColor: 'var(--color-error-light)', color: 'var(--color-error)', fontWeight: 700, marginLeft: 'auto' }}>
+                        <span style={{ fontSize: '0.7rem', padding: '1px 5px', borderRadius: 4, backgroundColor: 'var(--color-error-light)', color: 'var(--color-error)', fontWeight: 700, marginLeft: 'auto', flexShrink: 0 }}>
                             {sec.annotation_count}
                         </span>
                     )}
@@ -217,7 +257,7 @@ const Sidebar = ({ documentId }) => {
                     className={`toc-tab ${sidebarTab === 'annotations' ? 'active' : ''}`}
                     onClick={() => setSidebarTab('annotations')}
                 >
-                    Issues ({openIssues.length})
+                    Notes ({openIssues.length})
                 </button>
             </div>
 
@@ -250,7 +290,7 @@ const Sidebar = ({ documentId }) => {
                                     onClick={() => handleSectionClick(res.section_id)}
                                 >
                                     <div className="search-result-title">
-                                        Section {res.section_code}: {res.section_heading}
+                                        {formatSectionLabel(res.section_code, res.section_heading)}
                                     </div>
                                     <div className="search-result-chapter">
                                         {res.chapter_code || 'Schedules'}
@@ -287,19 +327,33 @@ const Sidebar = ({ documentId }) => {
                             >
                                 Resolved ({resolvedIssues.length})
                             </button>
+                            <button
+                                className={`btn ${issuesSubTab === 'stale' ? 'btn-primary' : 'btn-secondary'}`}
+                                style={{ padding: '4px 12px', fontSize: '0.75rem', flex: 1, height: 28 }}
+                                onClick={() => setIssuesSubTab('stale')}
+                                title="Findings whose text changed or disappeared in a newer JSON version"
+                            >
+                                Recheck ({staleIssues.length})
+                            </button>
                         </div>
                         
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 8px', overflowY: 'auto', flex: 1 }}>
-                            {(issuesSubTab === 'open' ? openIssues : resolvedIssues).length === 0 ? (
+                            {visibleIssues.length === 0 ? (
                                 <div style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem', padding: 12, textAlign: 'center' }}>
-                                    No {issuesSubTab} issues reported.
+                                    {issuesSubTab === 'stale'
+                                        ? 'No notes need rechecking.'
+                                        : `No ${issuesSubTab} notes.`}
                                 </div>
                             ) : (
-                                (issuesSubTab === 'open' ? openIssues : resolvedIssues).map(a => {
+                                visibleIssues.map(a => {
                                     const sec = sections.find(s => s.id === a.section_id);
-                                    const sectionLabel = sec 
+                                    const orphanCode = a.orphan_context?.section_code
+                                        || a.orphan_context?.marker;
+                                    const sectionLabel = sec
                                         ? `Sec ${sec.section_code}${a.footnote_id ? ' · Footnote' : ''}`
-                                        : `Section${a.footnote_id ? ' · Footnote' : ''}`;
+                                        : orphanCode
+                                            ? `Sec ${orphanCode} (removed)`
+                                            : `Section${a.footnote_id ? ' · Footnote' : ''}`;
                                     
                                     return (
                                         <div 
@@ -327,7 +381,7 @@ const Sidebar = ({ documentId }) => {
                                                     className="annotation-delete-btn" 
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        if (confirm("Are you sure you want to delete this issue?")) {
+                                                        if (confirm("Are you sure you want to delete this note?")) {
                                                             deleteAnnotation(a.id);
                                                         }
                                                     }}
@@ -337,6 +391,19 @@ const Sidebar = ({ documentId }) => {
                                                     <Trash2 size={12} style={{ color: 'var(--color-text-muted)' }} />
                                                 </button>
                                             </div>
+
+                                            {a.anchor_status === 'needs_recheck' && (
+                                                <div className="annotation-anchor-warning">
+                                                    The text this note pointed at changed in a
+                                                    newer JSON version — re-check where it belongs.
+                                                </div>
+                                            )}
+                                            {a.anchor_status === 'orphaned' && (
+                                                <div className="annotation-anchor-warning">
+                                                    The leaf this note pointed at no longer exists
+                                                    in the active version. The evidence is kept below.
+                                                </div>
+                                            )}
 
                                             <div className="annotation-card-text" style={{ fontSize: '0.8rem', fontStyle: 'italic', color: 'var(--color-text-primary)' }}>
                                                 "{a.highlighted_text}"

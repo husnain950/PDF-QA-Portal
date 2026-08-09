@@ -1,8 +1,9 @@
 import io
+import json
 
 import aiosqlite
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import UploadFile
 
 from backend.models import FootnoteStatusUpdate
 from backend.routes.documents import replace_json
@@ -54,10 +55,22 @@ async def test_footnote_revert_restores_document_pending_status(runtime_sandbox)
 
 
 @pytest.mark.asyncio
-async def test_act_corpus_json_replacement_requires_sync(runtime_sandbox):
+async def test_act_corpus_json_can_be_replaced_and_becomes_a_new_version(
+    runtime_sandbox,
+):
+    """ACT-corpus documents used to 409 here.
+
+    That guard existed because a replacement overwrote the parse in place with no way
+    back. Versions make it reversible, so the reviewer can push a corrected JSON without
+    waiting for a corpus sync -- and the sync still reconciles by content hash.
+    """
     source = runtime_sandbox["root"] / "export"
     write_pair(source)
     await run_sync(source)
+
+    payload = json.loads(sample_document())
+    payload["chapters"][0]["sections"][0]["plain_text"] = "Corrected first section"
+    payload["chapters"][0]["sections"][0]["html"] = "<p>Corrected first section</p>"
 
     async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
         db.row_factory = aiosqlite.Row
@@ -66,10 +79,51 @@ async def test_act_corpus_json_replacement_requires_sync(runtime_sandbox):
 
         replacement = UploadFile(
             filename="replacement.json",
-            file=io.BytesIO(sample_document().encode()),
+            file=io.BytesIO(json.dumps(payload).encode()),
         )
-        with pytest.raises(HTTPException) as error:
-            await replace_json(document_id, replacement, db)
+        response = await replace_json(
+            document_id, replacement, note="fixed table parsing", db=db
+        )
+        assert response.id == document_id
 
-    assert error.value.status_code == 409
-    assert "backend.sync_acts" in error.value.detail
+        async with db.execute(
+            "SELECT version_no, note, is_active FROM document_versions "
+            "WHERE document_id = ? ORDER BY version_no",
+            (document_id,),
+        ) as cursor:
+            rows = [dict(row) for row in await cursor.fetchall()]
+        async with db.execute(
+            "SELECT plain_text FROM sections ORDER BY sort_order LIMIT 1"
+        ) as cursor:
+            text = (await cursor.fetchone())["plain_text"]
+
+    assert [row["version_no"] for row in rows] == [1, 2]
+    assert rows[1]["is_active"] == 1 and rows[0]["is_active"] == 0
+    assert rows[1]["note"] == "fixed table parsing"
+    assert text == "Corrected first section"
+
+
+@pytest.mark.asyncio
+async def test_replacing_with_identical_json_creates_no_version(runtime_sandbox):
+    source = runtime_sandbox["root"] / "export"
+    write_pair(source)
+    await run_sync(source)
+
+    async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT id FROM documents LIMIT 1") as cursor:
+            document_id = (await cursor.fetchone())["id"]
+        await replace_json(
+            document_id,
+            UploadFile(
+                filename="same.json", file=io.BytesIO(sample_document().encode())
+            ),
+            db=db,
+        )
+        async with db.execute(
+            "SELECT COUNT(*) FROM document_versions WHERE document_id = ?",
+            (document_id,),
+        ) as cursor:
+            count = (await cursor.fetchone())[0]
+
+    assert count == 1, "identical bytes must not manufacture an empty version"

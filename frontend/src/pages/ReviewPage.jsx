@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Loader2, AlertCircle, Upload, CheckCircle } from 'lucide-react';
+import { ArrowLeft, Loader2, AlertCircle, Upload, CheckCircle, History } from 'lucide-react';
 
 import AppShell from '../components/layout/AppShell';
 import Sidebar from '../components/layout/Sidebar';
@@ -13,7 +13,9 @@ import Breadcrumbs from '../components/review/Breadcrumbs';
 import { useDocumentStore } from '../stores/documentStore';
 import { useReviewStore } from '../stores/reviewStore';
 import { useKeyboardNav } from '../hooks/useKeyboardNav';
-import { api } from '../utils/api';
+import { api, versionsApi } from '../utils/api';
+import VersionPanel from '../components/review/VersionPanel';
+import { formatLeafIdentity } from '../utils/tocLabels';
 
 const ReviewPage = () => {
     const { documentId, sectionId } = useParams();
@@ -22,6 +24,7 @@ const ReviewPage = () => {
     const [replacingLoading, setReplacingLoading] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
     const replaceJsonInputRef = useRef(null);
+    const [versionsOpen, setVersionsOpen] = useState(false);
 
     const handleReplaceJsonFileChange = async (e) => {
         const file = e.target.files[0];
@@ -33,18 +36,21 @@ const ReviewPage = () => {
             return;
         }
 
-        const confirmMsg = `Replace the parsed JSON structure for this document?\n\nStable sections keep their QA state. The portal will stop the replacement if it would remove annotated or reviewed evidence.`;
-        if (!window.confirm(confirmMsg)) {
+        const note = window.prompt(
+            'Add this JSON as a new version of the parse?\n\n'
+            + 'The PDF is untouched. Stable leaves keep their QA state, findings on '
+            + 'changed leaves are re-anchored, and you can roll back at any time.\n\n'
+            + 'Optional note (what did the pipeline fix?):',
+            '',
+        );
+        if (note === null) {
             e.target.value = '';
             return;
         }
 
-        const formData = new FormData();
-        formData.append('json_file', file);
-
         try {
             setReplacingLoading(true);
-            await api.post(`/documents/${documentId}/replace-json`, formData, true);
+            await versionsApi.create(documentId, file, { note });
             
             // Redirect to review page root (without sectionId) so it picks the new first section
             navigate(`/review/${documentId}`, { replace: true });
@@ -53,7 +59,8 @@ const ReviewPage = () => {
             await fetchDocument(documentId);
             await fetchSections(documentId);
             
-            setSuccessMessage('JSON structure replaced safely. Stable QA state was preserved.');
+            setSuccessMessage('New JSON version is active. Open Versions to see what changed.');
+            setVersionsOpen(true);
             setTimeout(() => setSuccessMessage(''), 6000);
         } catch (err) {
             alert('Failed to replace JSON: ' + (err.message || 'Unknown error'));
@@ -141,17 +148,23 @@ const ReviewPage = () => {
         }
     }, [viewMode, currentPage, documentId, fetchSectionsByPage]);
 
-    // Synchronize active section with URL sectionId
+    // Synchronize active section with URL sectionId; force PDF to leaf start_page on change.
     useEffect(() => {
         if (initialLoad || sections.length === 0 || viewMode !== 'section') return;
 
         if (sectionId) {
-            // If URL has sectionId and it's not the currently active one, fetch/set it
             if (!activeSection || activeSection.id !== sectionId) {
+                // Prefer immediate start_page from TOC so PdfPanel never clamps a stale
+                // page into the new range (e.g. landing on the end of 241–254).
+                const tocSection = sections.find((s) => s.id === sectionId);
+                if (tocSection?.start_page) {
+                    setCurrentPage(tocSection.start_page);
+                }
+
                 const loadSection = async () => {
                     const sec = await fetchSection(documentId, sectionId);
-                    if (sec && sec.start_page) {
-                        setCurrentPage(sec.start_page);
+                    if (sec) {
+                        setCurrentPage(sec.start_page || 1);
                     }
                 };
                 loadSection();
@@ -245,22 +258,39 @@ const ReviewPage = () => {
     );
 
     const statsText = activeDocument.stats
-        ? `(${activeDocument.stats.approved}/${activeDocument.total_sections} approved · ${activeDocument.stats.has_issues} issues)`
+        ? (() => {
+            const flagged = activeDocument.stats.flagged_sections
+                ?? activeDocument.stats.has_issues
+                ?? 0;
+            const openNotes = activeDocument.stats.open_annotations ?? 0;
+            return `(${activeDocument.stats.approved}/${activeDocument.total_sections} approved · ${flagged} flagged · ${openNotes} open notes)`;
+        })()
         : '';
 
     const actions = (
         <div className="review-header-actions flex align-center gap-3">
-            {activeDocument.source_type !== 'acts_corpus' && (
-                <button
-                    className="replace-json-action btn btn-secondary"
-                    style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}
-                    onClick={() => replaceJsonInputRef.current && replaceJsonInputRef.current.click()}
-                    title="Replace parsed JSON structure for this document"
-                >
-                    <Upload size={14} />
-                    <span>Replace JSON</span>
-                </button>
-            )}
+            {/* Available for every document now: ACT-corpus rows used to be locked out
+                because a replacement overwrote the parse in place. Versions make it
+                reversible, and sync_acts still reconciles by content hash. */}
+            <button
+                className="replace-json-action btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}
+                onClick={() => replaceJsonInputRef.current && replaceJsonInputRef.current.click()}
+                title="Add a new JSON version for this document (the PDF stays as it is)"
+            >
+                <Upload size={14} />
+                <span>New JSON version</span>
+            </button>
+
+            <button
+                className="versions-action btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'flex', alignItems: 'center', gap: 6 }}
+                onClick={() => setVersionsOpen((open) => !open)}
+                title="Version history, diffs and rollback"
+            >
+                <History size={14} />
+                <span>Versions</span>
+            </button>
 
             <div className="flex align-center gap-2">
                 <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-text-secondary)' }}>View:</span>
@@ -308,6 +338,16 @@ const ReviewPage = () => {
                 onChange={handleReplaceJsonFileChange}
             />
 
+            <VersionPanel
+                documentId={documentId}
+                open={versionsOpen}
+                onClose={() => setVersionsOpen(false)}
+                onChanged={async () => {
+                    await fetchDocument(documentId);
+                    await fetchSections(documentId);
+                }}
+            />
+
             {replacingLoading && (
                 <div style={{
                     position: 'fixed',
@@ -326,7 +366,7 @@ const ReviewPage = () => {
                 }}>
                     <Loader2 className="animate-spin" size={32} style={{ color: 'var(--color-accent)' }} />
                     <span style={{ color: '#ffffff', fontWeight: 600, fontSize: '0.95rem', fontFamily: 'var(--font-heading)' }}>
-                        Replacing JSON structure & re-parsing sections...
+                        Storing the new JSON version & carrying review state across it...
                     </span>
                 </div>
             )}
@@ -351,8 +391,17 @@ const ReviewPage = () => {
                     <Breadcrumbs section={activeSection} />
                     <div className="section-facts-bar" aria-label="Section facts">
                         <span>
-                            Section <strong>{currentSectionIndex + 1}</strong> of{' '}
-                            <strong>{sections.length}</strong>
+                            Leaf{' '}
+                            <strong>
+                                {currentSectionIndex >= 0 ? currentSectionIndex + 1 : '—'}
+                            </strong>{' '}
+                            of <strong>{sections.length}</strong>
+                        </span>
+                        <span>
+                            {formatLeafIdentity(
+                                activeSection.section_code,
+                                activeSection.section_heading,
+                            )}
                         </span>
                         <span>
                             Source pages{' '}

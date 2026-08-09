@@ -113,70 +113,161 @@ graph TB
 
 ### SQLite Schema
 
+> The authoritative definition is `backend/database.py:init_db()`, which also carries
+> every migration. This section is a readable summary of it, not a second source of
+> truth. There is no ORM and no migration framework: DDL is idempotent, and each
+> column added later has its own `SELECT col … except: ALTER TABLE` guard.
+
 ```sql
--- A document pair (one PDF + one JSON upload)
+-- A document is ONE static PDF plus a history of JSON parses of it.
+-- pdf_filename / json_filename hold content-addressed names relative to UPLOAD_DIR
+-- ("pdf/<sha256>.pdf", "json/<sha256>.json"); json_filename tracks the ACTIVE version.
 CREATE TABLE documents (
-    id            TEXT PRIMARY KEY,  -- UUID
-    name          TEXT NOT NULL,     -- Display name (e.g., "Income Tax Ordinance 2018")
-    pdf_filename  TEXT NOT NULL,     -- Stored filename on disk
-    json_filename TEXT NOT NULL,     -- Stored filename on disk
-    total_sections INTEGER NOT NULL, -- Pre-computed from JSON
-    total_pages   INTEGER NOT NULL,  -- Pre-computed from PDF (pdf page count)
-    uploaded_at   TEXT NOT NULL,     -- ISO 8601 timestamp
-    status        TEXT NOT NULL DEFAULT 'pending'  -- 'pending' | 'in_progress' | 'completed'
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    pdf_filename  TEXT NOT NULL,
+    json_filename TEXT NOT NULL,
+    total_sections INTEGER NOT NULL,
+    total_pages   INTEGER NOT NULL,
+    uploaded_at   TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',   -- pending|in_progress|completed
+    source_type   TEXT NOT NULL DEFAULT 'upload',    -- upload|acts_corpus
+    source_key    TEXT,                              -- corpus identity (the JSON stem)
+    source_hash   TEXT                               -- sha256(pdf_hash:json_hash)
+);
+CREATE UNIQUE INDEX idx_documents_source
+    ON documents(source_type, source_key) WHERE source_key IS NOT NULL;
+
+-- Every JSON ever ingested for a document. Blobs are immutable and content-addressed,
+-- so an old version stays readable and "did this change?" is a hash comparison.
+CREATE TABLE document_versions (
+    id             TEXT PRIMARY KEY,
+    document_id    TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    version_no     INTEGER NOT NULL,
+    json_filename  TEXT NOT NULL,     -- 'json/<sha256>.json'
+    json_sha256    TEXT NOT NULL,
+    source_name    TEXT,              -- original basename, for display
+    created_at     TEXT NOT NULL,
+    created_by     TEXT,
+    note           TEXT,              -- "what did the pipeline fix?"
+    total_sections INTEGER NOT NULL DEFAULT 0,
+    is_active      INTEGER NOT NULL DEFAULT 0,
+    stats_json     TEXT,              -- the carry-over report (see below)
+    UNIQUE(document_id, version_no)
+);
+-- Exactly one active version per document, enforced rather than assumed.
+CREATE UNIQUE INDEX idx_versions_active
+    ON document_versions(document_id) WHERE is_active = 1;
+
+-- The conversion pipeline's own QA numbers for a version. NEVER recomputed here --
+-- ingested from Acts_fbr's run_tests.py / audit_all.py reports.
+CREATE TABLE version_metrics (
+    version_id TEXT PRIMARY KEY REFERENCES document_versions(id) ON DELETE CASCADE,
+    invariants_passed INTEGER, invariants_total INTEGER,
+    cases_passed      INTEGER, cases_total      INTEGER,
+    body_conserved    REAL,    body_missing     INTEGER,
+    footnote_conserved REAL,   footnote_missing INTEGER,
+    gate_ok    INTEGER,
+    measured_at TEXT,
+    detail_json TEXT           -- failing invariant names + sample messages
 );
 
--- Flattened section index (denormalized from the JSON hierarchy)
+-- Flattened leaf index for the ACTIVE version (denormalized from the JSON hierarchy).
 CREATE TABLE sections (
-    id            TEXT PRIMARY KEY,  -- UUID
+    id            TEXT PRIMARY KEY,
     document_id   TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    chapter_code  TEXT,              -- e.g., "CHAPTER 1"
-    chapter_heading TEXT,
-    part_code     TEXT,              -- e.g., "PART I" (nullable)
-    part_heading  TEXT,
-    division_code TEXT,              -- e.g., "DIVISION I" (nullable)
-    division_heading TEXT,
-    section_code  TEXT NOT NULL,     -- e.g., "2"
-    section_heading TEXT NOT NULL,   -- e.g., "Definitions"
-    start_page    INTEGER,          -- PDF page (1-indexed)
-    end_page      INTEGER,          -- PDF page (1-indexed)
-    html_content  TEXT,             -- The parsed HTML
-    plain_text    TEXT,             -- The plain text version
-    sort_order    INTEGER NOT NULL, -- For deterministic ordering
-    review_status TEXT NOT NULL DEFAULT 'pending'  
-                                   -- 'pending' | 'approved' | 'has_issues'
+    chapter_code  TEXT, chapter_heading  TEXT,
+    part_code     TEXT, part_heading     TEXT,
+    division_code TEXT, division_heading TEXT,
+    section_code    TEXT NOT NULL,
+    section_heading TEXT NOT NULL,
+    start_page    INTEGER,
+    end_page      INTEGER,
+    html_content  TEXT,
+    plain_text    TEXT,
+    sort_order    INTEGER NOT NULL,   -- reading order (by page), not tree order
+    review_status TEXT NOT NULL DEFAULT 'pending',  -- pending|approved|has_issues
+    source_key    TEXT,               -- JSON-pointer path; the identity used on re-ingest
+    quality_flags TEXT,               -- JSON [{code, reason}]
+    hierarchy_kind TEXT               -- chapter|schedule
 );
+CREATE UNIQUE INDEX idx_sections_source
+    ON sections(document_id, source_key) WHERE source_key IS NOT NULL;
 
--- Footnotes for each section
 CREATE TABLE footnotes (
     id            TEXT PRIMARY KEY,
     section_id    TEXT NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-    marker        TEXT NOT NULL,    -- e.g., "1", "*"
-    page          INTEGER,         -- PDF page where footnote appears
-    text          TEXT NOT NULL,    -- Footnote content
+    marker        TEXT NOT NULL,
+    page          INTEGER,
+    text          TEXT NOT NULL,
+    html_content  TEXT,
     review_status TEXT NOT NULL DEFAULT 'pending'
-                                   -- 'pending' | 'approved' | 'has_issues'
 );
 
--- Inline annotations (highlights with issue descriptions)
+-- Reviewer findings. section_id is NULLable ON DELETE SET NULL and document_id is
+-- carried directly, so a finding on a leaf that a later version drops survives as an
+-- orphan with a snapshot of what it pointed at, instead of being cascaded away.
 CREATE TABLE annotations (
-    id            TEXT PRIMARY KEY,  -- UUID
-    section_id    TEXT NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-    highlighted_text TEXT NOT NULL,  -- The selected text
-    start_offset  INTEGER NOT NULL, -- Character offset in the HTML content
-    end_offset    INTEGER NOT NULL,
-    issue_description TEXT,         -- Reviewer's note about what's wrong
-    severity      TEXT NOT NULL DEFAULT 'error',  -- 'error' | 'warning' | 'info'
-    created_at    TEXT NOT NULL,    -- ISO 8601
-    reviewer_name TEXT              -- Optional: who flagged it
+    id            TEXT PRIMARY KEY,
+    document_id   TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    section_id    TEXT REFERENCES sections(id)  ON DELETE SET NULL,
+    footnote_id   TEXT REFERENCES footnotes(id) ON DELETE SET NULL,
+    highlighted_text TEXT NOT NULL,
+    context_before TEXT, context_after TEXT,  -- disambiguates re-anchoring
+    start_offset  INTEGER NOT NULL,           -- offsets into the RENDERED container's
+    end_offset    INTEGER NOT NULL,           -- textContent (see services/anchoring.py)
+    issue_description TEXT,
+    severity      TEXT NOT NULL DEFAULT 'error',    -- error|warning|info
+    created_at    TEXT NOT NULL,
+    reviewer_name TEXT,
+    status        TEXT NOT NULL DEFAULT 'open',     -- open|resolved
+    anchor_status TEXT NOT NULL DEFAULT 'anchored', -- anchored|needs_recheck|orphaned
+    created_version_id TEXT,
+    orphan_context TEXT                             -- JSON snapshot of the removed leaf
 );
 
--- Indexes for fast queries
-CREATE INDEX idx_sections_document ON sections(document_id);
-CREATE INDEX idx_sections_pages ON sections(document_id, start_page, end_page);
-CREATE INDEX idx_footnotes_section ON footnotes(section_id);
+CREATE INDEX idx_sections_document   ON sections(document_id);
+CREATE INDEX idx_sections_pages      ON sections(document_id, start_page, end_page);
+CREATE INDEX idx_footnotes_section   ON footnotes(section_id);
 CREATE INDEX idx_annotations_section ON annotations(section_id);
+CREATE INDEX idx_annotations_footnote ON annotations(footnote_id);
+CREATE INDEX idx_annotations_document ON annotations(document_id);
+CREATE INDEX idx_versions_document   ON document_versions(document_id, version_no DESC);
+
+-- Self-contained FTS5 index over sections, kept in step by ai/ad/au triggers.
+CREATE VIRTUAL TABLE sections_fts USING fts5(
+    section_id, section_code, section_heading, chapter_code, plain_text
+);
 ```
+
+### Ingesting a new version
+
+Every path — manual upload, `POST /documents/{id}/versions`, and `backend.sync_acts` —
+goes through `services/versions.create_version()` → `document_store.apply_parsed_document()`.
+
+Leaves are matched by `sections.source_key`. For each one the upsert either keeps it,
+updates it, or drops it, and then reconciles the human QA state:
+
+| what happened to the leaf | what happens to review state |
+|---|---|
+| unchanged | approval and findings kept as they are |
+| content changed | approval reset to `pending`; findings re-anchored against the new text |
+| content changed, text not re-findable | finding kept, marked `needs_recheck` |
+| leaf removed | finding kept, marked `orphaned` with a snapshot; approval counted as lost |
+
+The tally is returned as `stats["carryover"]`, stored in `document_versions.stats_json`,
+and shown in the portal's Versions panel:
+
+```json
+{"sections_added": 0, "sections_removed": 0, "sections_changed": 4,
+ "footnotes_removed": 0, "reanchored": 1, "needs_recheck": 0, "orphaned": 0,
+ "approvals_reset": 2, "approvals_lost": 0, "notes": ["…"]}
+```
+
+`apply_parsed_document(..., mode="strict")` restores the original behaviour — raise
+`ReviewConflict` and ingest nothing — and is what `sync_acts --strict` uses. It is not
+the default: refusing the fix left reviewers permanently on the defective parse, which
+is the problem versioning exists to solve.
 
 ### JSON Schema (Input)
 

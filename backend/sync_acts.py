@@ -1,31 +1,50 @@
-"""Repeatably import the Acts-Discovery export corpus into runtime storage."""
+"""Import a converted Acts corpus into runtime storage, as versions.
+
+Two source layouts are understood:
+
+``--acts-repo PATH``
+    The Acts_fbr pipeline repository itself. The corpus is ``output/*.json`` (its
+    ``_provisional/``, ``_refused/`` and ``_run/`` directories are subdirectories, so the
+    glob already excludes them) and each JSON names its own PDF in
+    ``metadata.filename``, which is resolved against ``Acts/**``. This mirrors
+    ``Acts_fbr/scripts/audit_all.py:source_for`` -- deliberately, so the portal and the
+    pipeline agree on which PDF a JSON came from. PDFs are detected by magic bytes
+    because six source files carry no ``.pdf`` suffix.
+
+``--source PATH``
+    One directory per Act, each holding exactly one PDF and one JSON.
+
+Re-running is cheap and safe: the PDF is content-addressed and never rewritten, and a
+JSON whose bytes are unchanged produces no new version. When the pipeline is fixed, the
+new JSON lands as the next version and reviewer findings are carried across it -- see
+``backend.services.document_store.apply_parsed_document``.
+"""
 
 import argparse
 import asyncio
 import hashlib
 import json
-import os
-import shutil
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import aiosqlite
 
 from backend.database import DB_PATH
-from backend.runtime import UPLOAD_DIR, bootstrap_runtime
-from backend.services.document_store import (
-    ReviewConflict,
-    apply_parsed_document,
-    document_status,
+from backend.runtime import (  # noqa: F401  (tests patch these)
+    UPLOAD_DIR,
+    bootstrap_runtime,
 )
+from backend.services import blob_store, versions
+from backend.services.document_store import STRICT, SUPERSEDE, ReviewConflict
 from backend.services.json_parser import parse_json_document
 from backend.services.pdf_service import get_pdf_page_count
 
 SOURCE_TYPE = "acts_corpus"
+PDF_MAGIC = b"%PDF-"
 
 
 @dataclass(frozen=True)
@@ -45,9 +64,20 @@ class ValidatedPair:
     total_pages: int
     sections: List[dict]
     footnotes: List[dict]
+    issues: List[str] = field(default_factory=list)
+
+
+def is_pdf(path: Path) -> bool:
+    """Magic-byte test. Six corpus sources have no ``.pdf`` extension."""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(len(PDF_MAGIC)) == PDF_MAGIC
+    except OSError:
+        return False
 
 
 def discover_pairs(source: Path) -> List[ExportPair]:
+    """One directory per Act, each with exactly one PDF and one JSON."""
     source = source.expanduser().resolve()
     if not source.is_dir():
         raise ValueError(f"Source directory does not exist: {source}")
@@ -89,12 +119,55 @@ def discover_pairs(source: Path) -> List[ExportPair]:
     return pairs
 
 
+def discover_acts_repo(root: Path) -> Tuple[List[ExportPair], List[str]]:
+    """Pair ``output/*.json`` with its source PDF under ``Acts/``.
+
+    Returns ``(pairs, unmatched)``. A JSON whose PDF cannot be found is reported, never
+    guessed at: the mapping is by exact ``metadata.filename``, which resolves the whole
+    live corpus, so a miss means something really is wrong upstream.
+    """
+    root = root.expanduser().resolve()
+    output_dir, acts_dir = root / "output", root / "Acts"
+    if not output_dir.is_dir():
+        raise ValueError(f"Not an Acts pipeline repository (no output/): {root}")
+    if not acts_dir.is_dir():
+        raise ValueError(f"Not an Acts pipeline repository (no Acts/): {root}")
+
+    by_name: Dict[str, Path] = {}
+    for candidate in sorted(acts_dir.rglob("*")):
+        if candidate.is_file() and not candidate.is_symlink() and is_pdf(candidate):
+            by_name.setdefault(candidate.name, candidate)
+
+    pairs, unmatched = [], []
+    for json_path in sorted(output_dir.glob("*.json"), key=lambda p: p.name.casefold()):
+        try:
+            metadata = json.loads(json_path.read_text(encoding="utf-8")).get("metadata") or {}
+        except (ValueError, OSError) as error:
+            unmatched.append(f"{json_path.name}: unreadable ({error})")
+            continue
+        wanted = metadata.get("filename")
+        if not wanted:
+            unmatched.append(f"{json_path.name}: no metadata.filename to resolve a PDF")
+            continue
+        pdf_path = by_name.get(wanted)
+        if pdf_path is None:
+            unmatched.append(f"{json_path.name}: no PDF named {wanted!r} under Acts/")
+            continue
+        pairs.append(
+            ExportPair(
+                source_key=json_path.stem,
+                pdf_path=pdf_path.resolve(),
+                json_path=json_path.resolve(),
+            )
+        )
+
+    if not pairs:
+        raise ValueError(f"No corpus JSON matched a source PDF in {root}")
+    return pairs, unmatched
+
+
 def hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return blob_store.sha256_file(path)
 
 
 def deterministic_document_id(source_key: str) -> str:
@@ -106,13 +179,38 @@ def deterministic_document_id(source_key: str) -> str:
     )
 
 
+def _page_range_issues(sections: List[dict], total_pages: int) -> List[str]:
+    """Report leaves the parser flagged as having impossible page ranges.
+
+    The flag itself is minted in ``parse_quality.assess_page_range`` so that every
+    ingest path carries it; this only surfaces the same finding on the sync's stderr,
+    and cross-checks the JSON's declared page count against the actual PDF.
+    """
+    issues: List[str] = []
+    for section in sections:
+        reasons = [
+            flag["reason"]
+            for flag in (section.get("quality_flags") or [])
+            if flag.get("code") == "page_range_out_of_bounds"
+        ]
+        end = section.get("end_page")
+        if not reasons and isinstance(end, int) and end > total_pages:
+            # The JSON's own metadata.total_pages disagreed with the real PDF.
+            reason = f"Declared end page {end} is past the PDF's {total_pages} pages."
+            section.setdefault("quality_flags", []).append(
+                {"code": "page_range_out_of_bounds", "reason": reason}
+            )
+            reasons = [reason]
+        label = section.get("section_code") or section["source_key"]
+        issues.extend(f"{label}: {reason}" for reason in reasons)
+    return issues
+
+
 def validate_pair(pair: ExportPair) -> ValidatedPair:
+    """Parse and check one pair. Raises only on defects that make it unreviewable."""
     document_id = deterministic_document_id(pair.source_key)
     json_content = pair.json_path.read_text(encoding="utf-8")
-    sections, footnotes = parse_json_document(
-        json_content,
-        document_id=document_id,
-    )
+    sections, footnotes = parse_json_document(json_content, document_id=document_id)
     if not sections:
         raise ValueError(f"{pair.source_key}: JSON has no reviewable sections")
 
@@ -124,18 +222,7 @@ def validate_pair(pair: ExportPair) -> ValidatedPair:
     if len(source_keys) != len(set(source_keys)):
         raise ValueError(f"{pair.source_key}: duplicate section source keys")
 
-    for section in sections:
-        start = section.get("start_page")
-        end = section.get("end_page")
-        if not isinstance(start, int) or not isinstance(end, int):
-            raise ValueError(
-                f"{pair.source_key}: {section['source_key']} has no integer page range"
-            )
-        if start < 1 or end < start or end > total_pages:
-            raise ValueError(
-                f"{pair.source_key}: {section['source_key']} has invalid "
-                f"page range {start}-{end} for {total_pages} pages"
-            )
+    issues = _page_range_issues(sections, total_pages)
 
     pdf_hash = hash_file(pair.pdf_path)
     json_hash = hash_file(pair.json_path)
@@ -151,121 +238,66 @@ def validate_pair(pair: ExportPair) -> ValidatedPair:
         total_pages=total_pages,
         sections=sections,
         footnotes=footnotes,
+        issues=issues,
     )
-
-
-def runtime_filename(document_id: str, digest: str, source_name: str) -> str:
-    safe_name = os.path.basename(source_name).replace("\x00", "")
-    return f"{document_id}_{digest[:16]}_{safe_name}"
-
-
-def copy_if_missing(source: Path, destination: Path) -> bool:
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.exists():
-        return False
-    temporary = destination.with_name(f".{destination.name}.syncing")
-    if temporary.exists():
-        temporary.unlink()
-    shutil.copy2(source, temporary)
-    os.replace(temporary, destination)
-    return True
-
-
-async def file_is_referenced(
-    db: aiosqlite.Connection,
-    filename: str,
-) -> bool:
-    async with db.execute(
-        """
-        SELECT 1
-        FROM documents
-        WHERE pdf_filename = ? OR json_filename = ?
-        LIMIT 1
-        """,
-        (filename, filename),
-    ) as cursor:
-        return await cursor.fetchone() is not None
 
 
 async def sync_validated_pair(
     db: aiosqlite.Connection,
     validated: ValidatedPair,
+    force: bool = False,
+    mode: str = SUPERSEDE,
+    note: Optional[str] = None,
 ) -> str:
     pair = validated.pair
     async with db.execute(
-        """
-        SELECT *
-        FROM documents
-        WHERE source_type = ? AND source_key = ?
-        """,
+        "SELECT * FROM documents WHERE source_type = ? AND source_key = ?",
         (SOURCE_TYPE, pair.source_key),
     ) as cursor:
         existing_row = await cursor.fetchone()
     existing = dict(existing_row) if existing_row else None
-
     document_id = existing["id"] if existing else validated.document_id
-    if document_id != validated.document_id:
-        # Recreate stable child ids with the already-established document id.
-        sections, footnotes = parse_json_document(
-            pair.json_path.read_text(encoding="utf-8"),
-            document_id=document_id,
-        )
-        validated.sections = sections
-        validated.footnotes = footnotes
 
-    pdf_filename = runtime_filename(
-        document_id,
-        validated.pdf_hash,
-        pair.pdf_path.name,
-    )
-    json_filename = runtime_filename(
-        document_id,
-        validated.json_hash,
-        pair.json_path.name,
-    )
-    pdf_destination = Path(UPLOAD_DIR) / pdf_filename
-    json_destination = Path(UPLOAD_DIR) / json_filename
+    pdf_filename = blob_store.rel_name("pdf", validated.pdf_hash)
+    pdf_stored = blob_store.usable(blob_store.blob_path(pdf_filename))
 
     if (
         existing
         and existing.get("source_hash") == validated.source_hash
-        and pdf_destination.exists()
-        and json_destination.exists()
+        and pdf_stored
+        and blob_store.usable(blob_store.blob_path(existing["json_filename"]))
+        and not force
     ):
         return "skipped"
 
-    created_files: List[Path] = []
-    if copy_if_missing(pair.pdf_path, pdf_destination):
-        created_files.append(pdf_destination)
-    if copy_if_missing(pair.json_path, json_destination):
-        created_files.append(json_destination)
+    # The PDF is immutable and shared; storing it is idempotent and outside the
+    # transaction on purpose, so a rolled-back version does not orphan a needed file.
+    # Both writes also repair a truncated blob left by an interrupted run -- the
+    # unchanged-hash fast path above would otherwise skip such a document forever.
+    repaired = False
+    if not pdf_stored:
+        blob_store.store_file(pair.pdf_path, "pdf")
+        repaired = existing is not None
 
-    old_files = []
-    if existing:
-        old_files = [
-            existing["pdf_filename"],
-            existing["json_filename"],
-        ]
+    previous_pdf = existing["pdf_filename"] if existing else None
+    json_bytes = pair.json_path.read_bytes()
+    json_filename = blob_store.rel_name("json", blob_store.sha256_bytes(json_bytes))
+    if not blob_store.usable(blob_store.blob_path(json_filename)):
+        blob_store.store_bytes(json_bytes, "json")
+        repaired = repaired or existing is not None
 
+    await db.execute("BEGIN IMMEDIATE")
     try:
-        await db.execute("BEGIN IMMEDIATE")
-        uploaded_at = (
-            existing["uploaded_at"]
-            if existing
-            else datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        )
         if existing:
             await db.execute(
                 """
-                UPDATE documents SET
-                    name = ?, pdf_filename = ?, json_filename = ?,
-                    total_pages = ?, source_hash = ?
+                UPDATE documents
+                SET name = ?, pdf_filename = ?, total_pages = ?, source_hash = ?
                 WHERE id = ?
                 """,
                 (
                     pair.source_key,
                     pdf_filename,
-                    json_filename,
                     validated.total_pages,
                     validated.source_hash,
                     document_id,
@@ -278,81 +310,96 @@ async def sync_validated_pair(
                     id, name, pdf_filename, json_filename, total_sections,
                     total_pages, uploaded_at, status, source_type, source_key,
                     source_hash
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, '', 0, ?, ?, 'pending', ?, ?, ?)
                 """,
                 (
                     document_id,
                     pair.source_key,
                     pdf_filename,
-                    json_filename,
-                    len(validated.sections),
                     validated.total_pages,
-                    uploaded_at,
-                    "pending",
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     SOURCE_TYPE,
                     pair.source_key,
                     validated.source_hash,
                 ),
             )
 
-        stats = await apply_parsed_document(
+        _row, outcome = await versions.create_version(
             db,
             document_id,
-            validated.sections,
-            validated.footnotes,
-        )
-        await db.execute(
-            """
-            UPDATE documents
-            SET total_sections = ?, status = ?
-            WHERE id = ?
-            """,
-            (stats["total"], document_status(stats), document_id),
+            json_bytes,
+            source_name=pair.json_path.name,
+            note=note or f"Synced from {pair.json_path.parent.name}/{pair.json_path.name}",
+            created_by="sync_acts",
+            mode=mode,
         )
         await db.commit()
     except Exception:
         await db.rollback()
-        for path in created_files:
-            if path.exists():
-                path.unlink()
         raise
 
-    for filename in old_files:
-        if filename not in (pdf_filename, json_filename):
-            path = Path(UPLOAD_DIR) / filename
-            if path.exists() and not await file_is_referenced(db, filename):
-                path.unlink()
+    if previous_pdf and previous_pdf != pdf_filename:
+        await blob_store.unlink_if_unreferenced(db, previous_pdf)
+
+    if outcome["status"] == "unchanged":
+        return "updated" if repaired else "skipped"
     return "updated" if existing else "added"
 
 
-async def run_sync(source: Path, dry_run: bool = False) -> Dict[str, int]:
-    pairs = discover_pairs(source)
-    summary = {
+async def run_sync(
+    source: Path,
+    dry_run: bool = False,
+    force: bool = False,
+    acts_repo: bool = False,
+    strict: bool = False,
+    metrics_dir: Optional[Path] = None,
+) -> Dict[str, object]:
+    if acts_repo:
+        pairs, unmatched = discover_acts_repo(source)
+    else:
+        pairs, unmatched = discover_pairs(source), []
+
+    summary: Dict[str, object] = {
         "discovered": len(pairs),
         "validated": 0,
         "added": 0,
         "updated": 0,
         "skipped": 0,
         "failed": 0,
+        "unmatched": len(unmatched),
+        "flagged_pages": 0,
         "sections": 0,
         "footnotes": 0,
         "pdf_pages": 0,
+        "problems": [],
     }
+    problems: List[str] = list(unmatched)
+    for line in unmatched:
+        print(f"UNMATCHED {line}", file=sys.stderr)
 
     validated_pairs: List[ValidatedPair] = []
     for pair in pairs:
         try:
             validated = validate_pair(pair)
-            validated_pairs.append(validated)
-            summary["validated"] += 1
-            summary["sections"] += len(validated.sections)
-            summary["footnotes"] += len(validated.footnotes)
-            summary["pdf_pages"] += validated.total_pages
         except Exception as error:
-            summary["failed"] += 1
+            summary["failed"] = int(summary["failed"]) + 1
+            problems.append(f"{pair.source_key}: {error}")
             print(f"ERROR {pair.source_key}: {error}", file=sys.stderr)
+            continue
+        validated_pairs.append(validated)
+        summary["validated"] = int(summary["validated"]) + 1
+        summary["sections"] = int(summary["sections"]) + len(validated.sections)
+        summary["footnotes"] = int(summary["footnotes"]) + len(validated.footnotes)
+        summary["pdf_pages"] = int(summary["pdf_pages"]) + validated.total_pages
+        if validated.issues:
+            summary["flagged_pages"] = int(summary["flagged_pages"]) + len(validated.issues)
+            for issue in validated.issues:
+                print(f"FLAG {pair.source_key}: {issue}", file=sys.stderr)
 
-    if dry_run or summary["failed"]:
+    # A defective edition no longer holds the other seventy-nine hostage. --strict
+    # restores the all-or-nothing behaviour for CI.
+    if dry_run or (strict and (summary["failed"] or unmatched)):
+        summary["problems"] = problems
         return summary
 
     await bootstrap_runtime()
@@ -361,30 +408,44 @@ async def run_sync(source: Path, dry_run: bool = False) -> Dict[str, int]:
         await db.execute("PRAGMA foreign_keys = ON;")
         for validated in validated_pairs:
             try:
-                result = await sync_validated_pair(db, validated)
-                summary[result] += 1
+                result = await sync_validated_pair(
+                    db,
+                    validated,
+                    force=force,
+                    mode=STRICT if strict else SUPERSEDE,
+                )
+                summary[result] = int(summary[result]) + 1
             except ReviewConflict as conflict:
-                summary["failed"] += 1
-                print(
-                    f"CONFLICT {validated.pair.source_key}: {conflict}",
-                    file=sys.stderr,
-                )
+                summary["failed"] = int(summary["failed"]) + 1
+                problems.append(f"{validated.pair.source_key}: {conflict}")
+                print(f"CONFLICT {validated.pair.source_key}: {conflict}", file=sys.stderr)
             except Exception as error:
-                summary["failed"] += 1
-                print(
-                    f"ERROR {validated.pair.source_key}: {error}",
-                    file=sys.stderr,
-                )
+                summary["failed"] = int(summary["failed"]) + 1
+                problems.append(f"{validated.pair.source_key}: {error}")
+                print(f"ERROR {validated.pair.source_key}: {error}", file=sys.stderr)
+
+        if metrics_dir is not None:
+            from backend.services import acts_metrics
+
+            summary["metrics"] = await acts_metrics.ingest(db, metrics_dir)
+            await db.commit()
+
+    summary["problems"] = problems
     return summary
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Sync Acts-Discovery PDF/JSON exports into PDF-QA Portal",
+        description="Sync a converted Acts corpus into the PDF-QA Portal",
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--acts-repo",
+        type=Path,
+        help="Acts_fbr pipeline repository (uses output/*.json + Acts/**)",
+    )
+    group.add_argument(
         "--source",
-        required=True,
         type=Path,
         help="Directory containing one folder per exported Act or edition",
     )
@@ -393,18 +454,54 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate the complete corpus without writing files or database rows",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-apply pairs even when source_hash and files are unchanged",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Abort the whole run on any validation problem, and refuse an ingest that "
+            "would supersede reviewer state (the pre-versioning behaviour)"
+        ),
+    )
+    parser.add_argument(
+        "--metrics",
+        nargs="?",
+        const="",
+        metavar="DIR",
+        help=(
+            "Ingest pipeline QA reports after syncing. Defaults to <repo>/reports; "
+            "see backend.services.acts_metrics for the expected files"
+        ),
+    )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    root = args.acts_repo or args.source
+    metrics_dir = None
+    if args.metrics is not None:
+        metrics_dir = Path(args.metrics) if args.metrics else root / "reports"
     try:
-        summary = asyncio.run(run_sync(args.source, dry_run=args.dry_run))
+        summary = asyncio.run(
+            run_sync(
+                root,
+                dry_run=args.dry_run,
+                force=args.force,
+                acts_repo=args.acts_repo is not None,
+                strict=args.strict,
+                metrics_dir=metrics_dir,
+            )
+        )
     except Exception as error:
         print(f"Sync failed: {error}", file=sys.stderr)
         return 1
-    print(json.dumps(summary, indent=2, sort_keys=True))
-    return 1 if summary["failed"] else 0
+    print(json.dumps(summary, indent=2, sort_keys=True, default=str))
+    return 1 if summary["failed"] or (args.strict and summary["unmatched"]) else 0
 
 
 if __name__ == "__main__":

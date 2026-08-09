@@ -3,9 +3,13 @@ import { useTextSelection } from '../../hooks/useTextSelection';
 import { useReviewStore } from '../../stores/reviewStore';
 import AnnotationPopover from '../annotations/AnnotationPopover';
 import FootnotePanel from '../footnotes/FootnotePanel';
-import { Copy, Check, Code, Eye, AlignLeft } from 'lucide-react';
+import { formatQualityFlagList } from '../../utils/qualityFlags';
+import { Copy, Check, Code, Eye, AlignLeft, AlertTriangle } from 'lucide-react';
 
-const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
+const HtmlPanel = ({ section, sectionId, htmlContent, footnotes, qualityFlags }) => {
+    const qualityReasons = formatQualityFlagList(
+        qualityFlags ?? section?.quality_flags,
+    );
     const containerRef = useRef(null);
     const { annotations, createAnnotation, fetchAnnotations } = useReviewStore();
     const [popoverCoords, setPopoverCoords] = useState(null);
@@ -113,6 +117,9 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
         annotations.forEach((annot) => {
             if (annot.footnote_id) return; // Skip footnote annotations in main text container
             if (annot.status === 'resolved') return; // Skip resolved annotations
+            // Stale offsets would highlight the wrong span; the Sidebar's Recheck tab
+            // is where these are surfaced instead.
+            if (annot.anchor_status && annot.anchor_status !== 'anchored') return;
             const range = createRangeFromOffsets(container, annot.start_offset, annot.end_offset);
             if (range) {
                 const mark = document.createElement('mark');
@@ -173,6 +180,8 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
                 highlightedText: selectionData.text,
                 startOffset: selectionData.start,
                 endOffset: selectionData.end,
+                contextBefore: selectionData.contextBefore,
+                contextAfter: selectionData.contextAfter,
                 issueDescription: data.issueDescription,
                 severity: data.severity,
                 reviewerName: data.reviewerName,
@@ -339,6 +348,23 @@ const HtmlPanel = ({ section, sectionId, htmlContent, footnotes }) => {
             </div>
 
             <div className="panel-body" style={{ position: 'relative' }}>
+                {qualityReasons.length > 0 && (
+                    <div
+                        className="quality-flags-banner"
+                        role="alert"
+                        data-testid="quality-flags-banner"
+                    >
+                        <AlertTriangle size={16} aria-hidden="true" />
+                        <div className="quality-flags-banner-body">
+                            <strong>Parse quality flags</strong>
+                            <ul>
+                                {qualityReasons.map((reason) => (
+                                    <li key={reason}>{reason}</li>
+                                ))}
+                            </ul>
+                        </div>
+                    </div>
+                )}
                 <div 
                     ref={containerRef} 
                     className="html-renderer-container"

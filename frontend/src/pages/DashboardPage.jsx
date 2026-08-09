@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { UploadCloud, FileText, CheckCircle, Clock, Trash2, Download, Upload, Loader2, Search } from 'lucide-react';
 import AppShell from '../components/layout/AppShell';
 import { useDocumentStore } from '../stores/documentStore';
-import { api } from '../utils/api';
+import DocumentHealth from '../components/dashboard/DocumentHealth';
+import { api, versionsApi } from '../utils/api';
 import { filterDocuments } from '../utils/documentFilters';
 
 const DashboardPage = () => {
@@ -41,21 +42,24 @@ const DashboardPage = () => {
             return;
         }
 
-        const confirmMsg = `Replace the parsed JSON structure for "${replacingDocName}"?\n\nStable sections keep their QA state. The portal will stop the replacement if it would remove annotated or reviewed evidence.`;
-        if (!window.confirm(confirmMsg)) {
+        const note = window.prompt(
+            `Add this JSON as a new version of "${replacingDocName}"?\n\n`
+            + 'The PDF is untouched. Stable leaves keep their QA state, findings on '
+            + 'changed leaves are re-anchored, and you can roll back at any time.\n\n'
+            + 'Optional note (what did the pipeline fix?):',
+            '',
+        );
+        if (note === null) {
             e.target.value = '';
             setReplacingDocId(null);
             setReplacingDocName('');
             return;
         }
 
-        const formData = new FormData();
-        formData.append('json_file', file);
-
         try {
             setReplacingLoading(true);
-            await api.post(`/documents/${replacingDocId}/replace-json`, formData, true);
-            setSuccessMessage('JSON structure replaced safely. Stable QA state was preserved.');
+            await versionsApi.create(replacingDocId, file, { note });
+            setSuccessMessage('New JSON version is active. Open the document to see what changed.');
             setTimeout(() => setSuccessMessage(''), 6000);
             fetchDocuments();
         } catch (err) {
@@ -173,7 +177,7 @@ const DashboardPage = () => {
                         <div className="stat-value" style={{ color: totalIssues > 0 ? 'var(--color-warning)' : 'inherit' }}>
                             {totalIssues}
                         </div>
-                        <div className="stat-label">Reported Issues</div>
+                        <div className="stat-label">Flagged sections</div>
                     </div>
                     <div className="stat-card">
                         <div className="stat-value" style={{ color: 'var(--color-success)' }}>
@@ -283,7 +287,16 @@ const DashboardPage = () => {
                                                 <span className="document-stat-item">
                                                     <strong>{doc.total_pages}</strong> pages
                                                 </span>
+                                                <span
+                                                    className="document-stat-item"
+                                                    title="JSON versions of this parse (the PDF is fixed)"
+                                                >
+                                                    <strong>{doc.version_count ?? 1}</strong>{' '}
+                                                    {doc.version_count === 1 ? 'version' : 'versions'}
+                                                </span>
                                             </div>
+
+                                            <DocumentHealth health={doc.health} />
                                         </div>
 
                                         {/* Actions */}
@@ -319,17 +332,15 @@ const DashboardPage = () => {
                                                 <span>CSV</span>
                                             </button>
 
-                                            {doc.source_type !== 'acts_corpus' && (
-                                                <button
-                                                    className="btn btn-secondary"
-                                                    style={{ padding: '8px 12px', fontSize: '0.85rem', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}
-                                                    onClick={(e) => handleReplaceJsonClick(doc.id, doc.name, e)}
-                                                    title="Replace parsed JSON structure"
-                                                >
-                                                    <Upload size={14} />
-                                                    <span>Replace JSON</span>
-                                                </button>
-                                            )}
+                                            <button
+                                                className="btn btn-secondary"
+                                                style={{ padding: '8px 12px', fontSize: '0.85rem', marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}
+                                                onClick={(e) => handleReplaceJsonClick(doc.id, doc.name, e)}
+                                                title="Add a new JSON version (the PDF is not re-uploaded)"
+                                            >
+                                                <Upload size={14} />
+                                                <span>New JSON version</span>
+                                            </button>
                                             
                                             <button 
                                                 className="btn btn-danger"

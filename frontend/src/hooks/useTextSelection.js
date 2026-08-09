@@ -1,5 +1,21 @@
 import { useState, useEffect } from 'react';
 
+/**
+ * Characters kept either side of a highlight. They are what lets the backend re-find
+ * an annotation when a new JSON version rewrites the leaf around it -- without them a
+ * repeated phrase is ambiguous and the finding has to be flagged for a human instead.
+ * Keep in step with CONTEXT_CHARS in backend/services/anchoring.py.
+ */
+export const CONTEXT_CHARS = 60;
+
+export const contextAround = (element, start, end) => {
+    const full = element?.textContent || '';
+    return {
+        contextBefore: full.slice(Math.max(0, start - CONTEXT_CHARS), start),
+        contextAfter: full.slice(end, end + CONTEXT_CHARS),
+    };
+};
+
 export const getSelectionCharacterOffsetsWithin = (element) => {
     let start = 0;
     let end = 0;
@@ -56,12 +72,14 @@ export const useTextSelection = (containerRef, onSelectionComplete) => {
                 left: rect.left - containerRect.left + container.scrollLeft + (rect.width / 2) - 160 // Center popover
             };
 
+            const { contextBefore, contextAfter } = contextAround(container, start, end);
+
             setSelectedText(text);
             setOffsets({ start, end });
             setSelectionCoords(coords);
 
             if (onSelectionComplete) {
-                onSelectionComplete({ text, start, end, coords });
+                onSelectionComplete({ text, start, end, coords, contextBefore, contextAfter });
             }
         };
 

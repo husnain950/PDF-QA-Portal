@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from uuid import uuid4
 
 import pytest_asyncio
 from pypdf import PdfWriter
@@ -61,6 +62,51 @@ def write_pair(root: Path, name: str = "Test Act") -> Path:
         writer.write(target)
     (directory / "act.json").write_text(sample_document(), encoding="utf-8")
     return directory
+
+
+async def add_annotation(
+    db,
+    section_id: str,
+    *,
+    annotation_id: str | None = None,
+    highlighted_text: str = "First",
+    start: int = 0,
+    end: int = 5,
+    footnote_id: str | None = None,
+    context_before: str | None = None,
+    context_after: str | None = None,
+    status: str = "open",
+):
+    """Insert an annotation, deriving ``document_id`` from the section it targets."""
+    async with db.execute(
+        "SELECT document_id FROM sections WHERE id = ?", (section_id,)
+    ) as cursor:
+        row = await cursor.fetchone()
+    assert row is not None, f"no such section: {section_id}"
+    annotation_id = annotation_id or str(uuid4())
+    await db.execute(
+        """
+        INSERT INTO annotations (
+            id, document_id, section_id, footnote_id, highlighted_text,
+            context_before, context_after, start_offset, end_offset,
+            issue_description, severity, created_at, status, anchor_status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Check extraction', 'error',
+                  '2026-07-29T00:00:00Z', ?, 'anchored')
+        """,
+        (
+            annotation_id,
+            row[0],
+            section_id,
+            footnote_id,
+            highlighted_text,
+            context_before,
+            context_after,
+            start,
+            end,
+            status,
+        ),
+    )
+    return annotation_id
 
 
 @pytest_asyncio.fixture

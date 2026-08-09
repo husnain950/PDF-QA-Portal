@@ -58,6 +58,40 @@ export const api = {
     },
 
     getFileUrl(filename) {
-        return `${import.meta.env.VITE_STATIC_URL || 'http://localhost:8000'}/uploads/${filename}`;
+        // Stored names are relative to the uploads root ("pdf/<sha256>.pdf"), which the
+        // static mount serves as a subpath. Each segment is encoded separately so the
+        // slash survives while spaces in any legacy flat name do not.
+        const encoded = String(filename || '')
+            .split('/')
+            .map(encodeURIComponent)
+            .join('/');
+        return `${import.meta.env.VITE_STATIC_URL || 'http://localhost:8000'}/uploads/${encoded}`;
     }
+};
+
+/** JSON versions of a document. The PDF is static; only the parse is versioned. */
+export const versionsApi = {
+    list(documentId) {
+        return api.get(`/documents/${documentId}/versions`);
+    },
+
+    create(documentId, file, { note, reviewerName } = {}) {
+        const form = new FormData();
+        form.append('json_file', file);
+        if (note) form.append('note', note);
+        if (reviewerName) form.append('reviewer_name', reviewerName);
+        return api.post(`/documents/${documentId}/versions`, form, true);
+    },
+
+    activate(documentId, versionId) {
+        return api.post(
+            `/documents/${documentId}/versions/${versionId}/activate`,
+            {},
+        );
+    },
+
+    diff(documentId, versionId, againstId) {
+        const query = againstId ? `?against=${encodeURIComponent(againstId)}` : '';
+        return api.get(`/documents/${documentId}/versions/${versionId}/diff${query}`);
+    },
 };

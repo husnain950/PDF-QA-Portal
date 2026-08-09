@@ -18,6 +18,11 @@ backend/uploads/*
 !backend/uploads/.gitkeep
 !backend/data/.gitkeep
 
+# Source PDFs are static and are NOT carried in git (they were 163 MB of it).
+# Populate the server's uploads volume once -- see "Seeding storage" in README.md.
+backend/seed_uploads/*
+!backend/seed_uploads/.gitkeep
+
 # System files
 .DS_Store
 .DS_Store?
@@ -26,3 +31,13 @@ backend/uploads/*
 # Agent specific config/logs
 .gemini/
 .agents/
+backend/.backup-*/
+
+# Stray zero-byte SQLite files at the wrong path (the real DB is backend/data/)
+backend/qa_portal.db
+backend/db.sqlite
+
+# Ad-hoc Playwright probes
+frontend/probe*.mjs
+frontend/repro.mjs
+frontend/sweep.mjs

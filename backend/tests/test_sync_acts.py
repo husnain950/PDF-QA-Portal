@@ -3,10 +3,11 @@ from pathlib import Path
 
 import aiosqlite
 import pytest
+from pypdf import PdfWriter
 
 from backend.routes.documents import list_documents
-from backend.sync_acts import discover_pairs, run_sync
-from backend.tests.conftest import sample_document, write_pair
+from backend.sync_acts import discover_acts_repo, discover_pairs, run_sync
+from backend.tests.conftest import add_annotation, sample_document, write_pair
 
 
 def test_pair_discovery_rejects_ambiguous_and_symbolic_sources(tmp_path):
@@ -63,13 +64,33 @@ async def test_sync_is_idempotent_and_keeps_fts_and_api_consistent(
 
 
 @pytest.mark.asyncio
-async def test_changed_annotated_source_rolls_back_document_and_files(
+async def test_sync_replaces_empty_upload_stub(
     runtime_sandbox,
 ):
     source = runtime_sandbox["root"] / "export"
-    pair_directory = write_pair(source)
+    write_pair(source)
     first = await run_sync(source)
     assert first["added"] == 1
+
+    upload_dir = Path(runtime_sandbox["upload_dir"])
+    pdfs = list(upload_dir.glob("pdf/*.pdf"))
+    assert len(pdfs) == 1
+    pdfs[0].write_bytes(b"")
+
+    # Unchanged source_hash would previously skip forever while leaving a 0-byte stub.
+    repaired = await run_sync(source)
+    assert repaired["failed"] == 0
+    assert repaired["skipped"] == 0
+    assert repaired["updated"] == 1
+    assert pdfs[0].stat().st_size > 0
+
+
+@pytest.mark.asyncio
+async def test_strict_mode_refuses_to_supersede_an_annotated_leaf(runtime_sandbox):
+    """--strict keeps the pre-versioning contract: refuse, roll back, change nothing."""
+    source = runtime_sandbox["root"] / "export"
+    pair_directory = write_pair(source)
+    assert (await run_sync(source))["added"] == 1
 
     async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
         db.row_factory = aiosqlite.Row
@@ -81,24 +102,18 @@ async def test_changed_annotated_source_rolls_back_document_and_files(
             """
         ) as cursor:
             before = dict(await cursor.fetchone())
-        await db.execute(
-            """
-            INSERT INTO annotations (
-                id, section_id, highlighted_text, start_offset, end_offset,
-                severity, created_at, status
-            ) VALUES ('annotation-1', ?, 'First', 0, 5, 'error', 'now', 'open')
-            """,
-            (before["section_id"],),
+        await add_annotation(
+            db, before["section_id"], annotation_id="annotation-1",
+            highlighted_text="First",
         )
         await db.commit()
 
     payload = json.loads(sample_document())
     payload["chapters"][0]["sections"][0]["plain_text"] = "Changed first section"
-    (pair_directory / "act.json").write_text(
-        json.dumps(payload),
-        encoding="utf-8",
-    )
-    result = await run_sync(source)
+    payload["chapters"][0]["sections"][0]["html"] = "<p>Changed first section</p>"
+    (pair_directory / "act.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = await run_sync(source, strict=True)
     assert result["failed"] == 1
 
     async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
@@ -109,6 +124,168 @@ async def test_changed_annotated_source_rolls_back_document_and_files(
             after_hash = (await cursor.fetchone())[0]
         async with db.execute("SELECT COUNT(*) FROM annotations") as cursor:
             annotation_count = (await cursor.fetchone())[0]
+        async with db.execute("SELECT COUNT(*) FROM document_versions") as cursor:
+            version_count = (await cursor.fetchone())[0]
     assert after_hash == before["source_hash"]
     assert annotation_count == 1
-    assert len(list(Path(runtime_sandbox["upload_dir"]).iterdir())) == 2
+    assert version_count == 1, "a refused sync must not leave a version behind"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_fix_lands_and_carries_the_annotation_forward(runtime_sandbox):
+    """The whole point of versioning: an annotated leaf no longer blocks the fix."""
+    source = runtime_sandbox["root"] / "export"
+    pair_directory = write_pair(source)
+    assert (await run_sync(source))["added"] == 1
+
+    async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id FROM sections ORDER BY sort_order LIMIT 1"
+        ) as cursor:
+            section_id = (await cursor.fetchone())["id"]
+        # "First section" survives the edit below, so the finding can be re-found.
+        await add_annotation(
+            db, section_id, annotation_id="annotation-1",
+            highlighted_text="First section", start=0, end=13,
+        )
+        await db.commit()
+
+    payload = json.loads(sample_document())
+    payload["chapters"][0]["sections"][0]["plain_text"] = "Corrected. First section"
+    payload["chapters"][0]["sections"][0]["html"] = "<p>Corrected. First section</p>"
+    (pair_directory / "act.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    result = await run_sync(source)
+    assert result["failed"] == 0
+    assert result["updated"] == 1
+
+    async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM annotations WHERE id = 'annotation-1'"
+        ) as cursor:
+            annotation = dict(await cursor.fetchone())
+        async with db.execute(
+            "SELECT version_no, is_active, stats_json FROM document_versions "
+            "ORDER BY version_no"
+        ) as cursor:
+            all_versions = [dict(row) for row in await cursor.fetchall()]
+        async with db.execute("SELECT plain_text FROM sections WHERE id = ?",
+                              (section_id,)) as cursor:
+            text = (await cursor.fetchone())["plain_text"]
+
+    assert text == "Corrected. First section", "the fix must actually land"
+    assert [v["version_no"] for v in all_versions] == [1, 2]
+    assert [v["is_active"] for v in all_versions] == [0, 1]
+    # Re-anchored, not lost and not left pointing at the old offsets.
+    assert annotation["anchor_status"] == "anchored"
+    assert text[annotation["start_offset"]:annotation["end_offset"]] == "First section"
+    carryover = json.loads(all_versions[1]["stats_json"])
+    assert carryover["reanchored"] == 1 and carryover["sections_changed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_removed_leaf_keeps_its_finding_as_an_orphan(runtime_sandbox):
+    source = runtime_sandbox["root"] / "export"
+    pair_directory = write_pair(source)
+    await run_sync(source)
+
+    async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id FROM sections ORDER BY sort_order DESC LIMIT 1"
+        ) as cursor:
+            doomed = (await cursor.fetchone())["id"]
+        await add_annotation(db, doomed, annotation_id="doomed-1",
+                             highlighted_text="Second")
+        await db.commit()
+
+    payload = json.loads(sample_document())
+    del payload["chapters"][0]["sections"][1]
+    (pair_directory / "act.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    assert (await run_sync(source))["failed"] == 0
+
+    async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM annotations WHERE id = 'doomed-1'"
+        ) as cursor:
+            annotation = dict(await cursor.fetchone())
+        async with db.execute("SELECT COUNT(*) FROM sections") as cursor:
+            remaining = (await cursor.fetchone())[0]
+
+    assert remaining == 1, "the removed leaf really is gone"
+    assert annotation["section_id"] is None
+    assert annotation["anchor_status"] == "orphaned"
+    context = json.loads(annotation["orphan_context"])
+    assert context["section_heading"] == "Repeated code", context
+    assert "Second section" in context["plain_text"], context
+
+
+@pytest.mark.asyncio
+async def test_acts_repo_layout_is_discovered_and_page_ranges_are_flagged(
+    runtime_sandbox, tmp_path
+):
+    """The Acts_fbr shape: flat output/*.json resolved to Acts/** by metadata.filename."""
+    repo = tmp_path / "Acts_fbr"
+    (repo / "output" / "_provisional").mkdir(parents=True)
+    (repo / "Acts" / "Customs Act, 1969").mkdir(parents=True)
+
+    writer = PdfWriter()
+    for _ in range(3):
+        writer.add_blank_page(width=612, height=792)
+    # No .pdf suffix: six real corpus sources are like this, hence magic-byte detection.
+    with (repo / "Acts" / "Customs Act, 1969" / "Customs Act 2025").open("wb") as fh:
+        writer.write(fh)
+
+    payload = json.loads(sample_document())
+    payload["metadata"]["filename"] = "Customs Act 2025"
+    # A year misread as a folio -- the real defect measured in the live corpus.
+    payload["chapters"][0]["sections"][1]["start_page"] = 1995
+    payload["chapters"][0]["sections"][1]["end_page"] = 1995
+    (repo / "output" / "Customs Act 2025.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    # Neither of these may be picked up as corpus.
+    (repo / "output" / "_provisional" / "Sub Floor.json").write_text("{}", encoding="utf-8")
+    (repo / "output" / "Orphan Edition.json").write_text(
+        json.dumps({"metadata": {"filename": "nothing.pdf"}, "chapters": []}),
+        encoding="utf-8",
+    )
+
+    pairs, unmatched = discover_acts_repo(repo)
+    assert [pair.source_key for pair in pairs] == ["Customs Act 2025"]
+    assert len(unmatched) == 1 and "Orphan Edition.json" in unmatched[0]
+
+    result = await run_sync(repo, acts_repo=True)
+    assert result["added"] == 1
+    assert result["failed"] == 0, "one bad leaf must not reject the edition"
+    assert result["unmatched"] == 1
+    assert result["flagged_pages"] == 1
+
+    async with aiosqlite.connect(runtime_sandbox["db_path"]) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT quality_flags, review_status FROM sections "
+            "WHERE start_page = 1995"
+        ) as cursor:
+            flagged = dict(await cursor.fetchone())
+    codes = [flag["code"] for flag in json.loads(flagged["quality_flags"])]
+    assert "page_range_out_of_bounds" in codes, flagged
+
+
+@pytest.mark.asyncio
+async def test_identical_pdf_across_documents_is_stored_once(runtime_sandbox):
+    """Static PDFs: the same source bytes must never be written twice."""
+    source = runtime_sandbox["root"] / "export"
+    write_pair(source, name="Act One")
+    write_pair(source, name="Act Two")
+
+    result = await run_sync(source)
+    assert result["added"] == 2
+
+    upload_dir = Path(runtime_sandbox["upload_dir"])
+    assert len(list(upload_dir.glob("pdf/*.pdf"))) == 1, "identical PDFs must dedupe"
+    assert len(list(upload_dir.glob("json/*.json"))) == 1

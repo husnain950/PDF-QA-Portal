@@ -1,5 +1,4 @@
 import sqlite3
-import uuid
 
 import aiosqlite
 import pytest
@@ -7,7 +6,7 @@ import pytest
 import backend.database as database
 from backend.services.document_store import ReviewConflict, apply_parsed_document
 from backend.services.json_parser import parse_json_document
-from backend.tests.conftest import sample_document
+from backend.tests.conftest import add_annotation, sample_document
 
 
 @pytest.mark.asyncio
@@ -54,11 +53,13 @@ async def test_migration_adds_source_columns_and_unique_indexes(monkeypatch, tmp
 
     assert {"source_type", "source_key", "source_hash"} <= document_columns
     assert "source_key" in section_columns
+    assert "quality_flags" in section_columns
+    assert "hierarchy_kind" in section_columns
     assert "idx_sections_source" in indexes
 
 
 @pytest.mark.asyncio
-async def test_store_preserves_state_and_rejects_annotated_content_changes(
+async def test_store_preserves_state_and_rejects_annotated_content_changes_in_strict_mode(
     runtime_sandbox,
 ):
     document_id = "store-document"
@@ -95,25 +96,7 @@ async def test_store_preserves_state_and_rejects_annotated_content_changes(
             "UPDATE sections SET review_status = 'approved' WHERE id IN (?, ?)",
             (first_id, second_id),
         )
-        await db.execute(
-            """
-            INSERT INTO annotations (
-                id, section_id, highlighted_text, start_offset, end_offset,
-                issue_description, severity, created_at, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                str(uuid.uuid4()),
-                first_id,
-                "First",
-                0,
-                5,
-                "Check extraction",
-                "error",
-                "2026-07-29T00:00:00Z",
-                "open",
-            ),
-        )
+        await add_annotation(db, first_id, highlighted_text="First")
         await db.commit()
 
         identical_stats = await apply_parsed_document(
@@ -135,6 +118,7 @@ async def test_store_preserves_state_and_rejects_annotated_content_changes(
                 document_id,
                 changed_sections,
                 changed_footnotes,
+                mode="strict",
             )
         await db.rollback()
 
@@ -156,7 +140,7 @@ async def test_store_preserves_state_and_rejects_annotated_content_changes(
 
 
 @pytest.mark.asyncio
-async def test_store_rejects_removing_reviewed_evidence(runtime_sandbox):
+async def test_store_strict_mode_rejects_removing_reviewed_evidence(runtime_sandbox):
     document_id = "remove-document"
     sections, footnotes = parse_json_document(
         sample_document(),
@@ -187,12 +171,13 @@ async def test_store_rejects_removing_reviewed_evidence(runtime_sandbox):
                 document_id,
                 sections[:1],
                 footnotes,
+                mode="strict",
             )
         await db.rollback()
 
 
 @pytest.mark.asyncio
-async def test_store_rejects_reviewed_footnote_removed_with_pending_section(
+async def test_store_strict_mode_rejects_reviewed_footnote_removal(
     runtime_sandbox,
 ):
     document_id = "footnote-remove-document"
@@ -225,5 +210,27 @@ async def test_store_rejects_reviewed_footnote_removed_with_pending_section(
                 document_id,
                 sections[1:],
                 [],
+                mode="strict",
             )
         await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_parser_autoflag_does_not_block_an_upstream_fix(tmp_path):
+    """`has_issues` is machine-assigned, so it must not veto a corrected parse.
+
+    The guard used to treat any non-pending status as QA state. Because
+    `parse_json_document` stamps `has_issues` on every parse, re-syncing a corrected
+    corpus refused 64 of 93 documents on rows the parser had flagged itself — leaving
+    reviewers stuck on the defective structure for good.
+    """
+    from backend.services.document_store import _carries_human_qa_state
+
+    auto_flagged = {"review_status": "has_issues", "annotation_count": 0}
+    assert not _carries_human_qa_state(auto_flagged)
+
+    # Human intent is still protected.
+    assert _carries_human_qa_state({"review_status": "approved", "annotation_count": 0})
+    assert _carries_human_qa_state({"review_status": "pending", "annotation_count": 1})
+    assert _carries_human_qa_state({"review_status": "has_issues", "annotation_count": 2})
+    assert not _carries_human_qa_state({"review_status": "pending", "annotation_count": 0})

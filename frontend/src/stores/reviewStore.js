@@ -40,7 +40,9 @@ export const useReviewStore = create((set, get) => ({
                 issue_description: annotationData.issueDescription,
                 severity: annotationData.severity,
                 reviewer_name: annotationData.reviewerName,
-                footnote_id: annotationData.footnoteId || null
+                footnote_id: annotationData.footnoteId || null,
+                context_before: annotationData.contextBefore ?? null,
+                context_after: annotationData.contextAfter ?? null
             });
 
             // Update annotations in store

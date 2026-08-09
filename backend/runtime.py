@@ -12,7 +12,13 @@ SEED_UPLOAD_DIR = os.path.join(BACKEND_DIR, "seed_uploads")
 
 
 def seed_runtime_files() -> None:
-    """Populate ignored runtime storage without overwriting user QA state."""
+    """Populate ignored runtime storage without overwriting user QA state.
+
+    ``seed_uploads`` is no longer carried in git -- source PDFs are static and were
+    163 MB of repository. It is still honoured when an operator drops files there, but
+    a deployment normally populates ``uploads/`` from the server volume or by running
+    ``backend.sync_acts``. See "Seeding storage" in the README.
+    """
 
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -85,3 +91,16 @@ async def bootstrap_runtime() -> None:
     seed_runtime_files()
     await init_db()
     await merge_seed_footnote_html()
+
+    # A seeded database still carries the pre-versioning flat upload names. Addressing
+    # them is idempotent and costs two queries once everything is already addressed, so
+    # it runs on boot rather than being a step someone has to remember on every deploy.
+    # Imported here, not at module scope: blob_store imports this module.
+    from backend.migrate_blobs import migrate
+
+    report = await migrate()
+    if report["moved"] or report["missing"]:
+        print(
+            f"[runtime] blob migration: moved {report['moved']}, "
+            f"deduped {report['deduped']}, missing {len(report['missing'])}"
+        )
