@@ -9,6 +9,7 @@ import aiosqlite
 
 from backend.database import DB_PATH, init_db
 from backend.services.json_parser import parse_json_document
+from backend.services.parse_quality import serialize_quality_flags
 from backend.services.pdf_service import get_pdf_page_count
 
 FBR_PARSING_DIR = "/Users/muhammad.husnain/Downloads/code/AG/FBR-Parsing"
@@ -119,15 +120,17 @@ async def deploy_and_seed():
                         id, document_id, chapter_code, chapter_heading, part_code, part_heading,
                         division_code, division_heading, section_code, section_heading,
                         start_page, end_page, html_content, plain_text, sort_order,
-                        review_status, source_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        review_status, source_key, quality_flags, hierarchy_kind
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sec["id"], doc_id, sec["chapter_code"], sec["chapter_heading"],
                         sec["part_code"], sec["part_heading"], sec["division_code"], sec["division_heading"],
                         sec["section_code"], sec["section_heading"], sec["start_page"], sec["end_page"],
                         sec["html_content"], sec["plain_text"], sec["sort_order"],
-                        sec["review_status"], sec["source_key"]
+                        sec["review_status"], sec["source_key"],
+                        serialize_quality_flags(sec.get("quality_flags")),
+                        sec.get("hierarchy_kind"),
                     )
                 )
             

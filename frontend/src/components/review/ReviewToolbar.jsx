@@ -2,6 +2,10 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Check, AlertTriangle, ArrowLeft, ArrowRight, Loader2, Clock } from 'lucide-react';
 import { useDocumentStore } from '../../stores/documentStore';
+import {
+    formatQualityFlagList,
+    hasCriticalQualityFlags,
+} from '../../utils/qualityFlags';
 
 const ReviewToolbar = () => {
     const navigate = useNavigate();
@@ -19,6 +23,8 @@ const ReviewToolbar = () => {
     const currentIndex = sections.findIndex(s => s.id === activeSection.id);
     const hasPrev = currentIndex > 0;
     const hasNext = currentIndex < sections.length - 1;
+    const qualityReasons = formatQualityFlagList(activeSection.quality_flags);
+    const needsQualityOverride = hasCriticalQualityFlags(activeSection.quality_flags);
 
     const navigateToSection = (index) => {
         if (index < 0 || index >= sections.length) return;
@@ -27,6 +33,13 @@ const ReviewToolbar = () => {
     };
 
     const handleApprove = async () => {
+        if (needsQualityOverride) {
+            const listed = qualityReasons.map((r) => `• ${r}`).join('\n');
+            const confirmed = window.confirm(
+                `Override parse-quality flags:\n\n${listed}\n\nApprove this section anyway?`,
+            );
+            if (!confirmed) return;
+        }
         try {
             await updateSectionStatus(activeDocument.id, activeSection.id, 'approved');
             // Auto advance

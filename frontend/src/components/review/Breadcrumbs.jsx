@@ -1,5 +1,6 @@
 import React from 'react';
 import { ChevronRight } from 'lucide-react';
+import { cleanHeading, hierarchyTypeLabel } from '../../utils/tocLabels';
 
 const Breadcrumbs = ({ section }) => {
     if (!section) return null;
@@ -12,7 +13,8 @@ const Breadcrumbs = ({ section }) => {
         division_code,
         division_heading,
         section_code,
-        section_heading
+        section_heading,
+        hierarchy_kind,
     } = section;
 
     const items = [];
@@ -33,11 +35,12 @@ const Breadcrumbs = ({ section }) => {
     };
 
     if (chapter_code && chapter_code.trim()) {
-        const formatted = formatBreadcrumb('Chapter', chapter_code);
+        const type = hierarchyTypeLabel(hierarchy_kind, chapter_code, chapter_heading);
+        const formatted = formatBreadcrumb(type, chapter_code);
         items.push({
-            type: 'Chapter',
+            type,
             code: formatted,
-            heading: chapter_heading
+            heading: cleanHeading(chapter_heading),
         });
     }
 
@@ -46,7 +49,7 @@ const Breadcrumbs = ({ section }) => {
         items.push({
             type: 'Part',
             code: formatted,
-            heading: part_heading
+            heading: cleanHeading(part_heading),
         });
     }
 
@@ -55,7 +58,7 @@ const Breadcrumbs = ({ section }) => {
         items.push({
             type: 'Division',
             code: formatted,
-            heading: division_heading
+            heading: cleanHeading(division_heading),
         });
     }
 
@@ -64,7 +67,7 @@ const Breadcrumbs = ({ section }) => {
         items.push({
             type: 'Section',
             code: formatted,
-            heading: section_heading
+            heading: cleanHeading(section_heading),
         });
     }
 
@@ -72,6 +75,7 @@ const Breadcrumbs = ({ section }) => {
 
     const abbrs = {
         Chapter: 'Chapter|Ch',
+        Schedule: 'Schedule|Sch',
         Part: 'Part|Pt',
         Division: 'Division|Div',
         Section: 'Section|Sec'

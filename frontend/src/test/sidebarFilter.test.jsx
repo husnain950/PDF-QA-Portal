@@ -56,4 +56,50 @@ describe('large TOC filtering', () => {
         expect(screen.getByText(/Needle provision/)).toBeInTheDocument();
         expect(screen.queryByText(/Provision 500$/)).not.toBeInTheDocument();
     });
+
+    it('skips orphan blank chapter headers and does not hard-truncate labels', () => {
+        useDocumentStore.setState({
+            sections: [
+                {
+                    id: 'sec-blank-chapter',
+                    section_code: '1',
+                    section_heading: 'Short title, extent and commencement of this Act',
+                    chapter_code: '',
+                    chapter_heading: '',
+                    review_status: 'pending',
+                    annotation_count: 0,
+                    start_page: 1,
+                },
+                {
+                    id: 'sec-part-leaf',
+                    section_code: 'PART I',
+                    section_heading: '] THE GAZETTE OF PAKISTAN, EXTRA.',
+                    chapter_code: '',
+                    chapter_heading: '',
+                    review_status: 'pending',
+                    annotation_count: 0,
+                    start_page: 2,
+                },
+            ],
+            activeSection: null,
+            searchResults: [],
+            loading: { search: false },
+        });
+        useUiStore.setState({ sidebarTab: 'toc' });
+
+        const { container } = render(
+            <MemoryRouter>
+                <Sidebar documentId="document-1" />
+            </MemoryRouter>,
+        );
+
+        expect(container.querySelector('.toc-node.level-chapter')).toBeNull();
+        expect(
+            screen.getByText(
+                'Section 1: Short title, extent and commencement of this Act',
+            ),
+        ).toBeInTheDocument();
+        expect(screen.getByText('PART I')).toBeInTheDocument();
+        expect(screen.queryByText(/THE GAZETTE/)).not.toBeInTheDocument();
+    });
 });

@@ -4,12 +4,64 @@ from fastapi import APIRouter, Depends, HTTPException
 from backend.database import get_db
 from backend.models import (
     FootnoteResponse,
+    QualityFlag,
     SectionMetadataResponse,
     SectionResponse,
     SectionStatusUpdate,
 )
+from backend.services.parse_quality import deserialize_quality_flags
 
 router = APIRouter(prefix="/documents", tags=["sections"])
+
+
+def _quality_flags_from_row(row) -> list[QualityFlag]:
+    raw = None
+    try:
+        raw = row["quality_flags"]
+    except (KeyError, IndexError):
+        raw = None
+    return [QualityFlag(**flag) for flag in deserialize_quality_flags(raw)]
+
+
+def _hierarchy_kind_from_row(row) -> str | None:
+    try:
+        value = row["hierarchy_kind"]
+    except (KeyError, IndexError):
+        return None
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    return text or None
+
+
+def _section_metadata_kwargs(r) -> dict:
+    return dict(
+        id=r["id"],
+        document_id=r["document_id"],
+        chapter_code=r["chapter_code"],
+        chapter_heading=r["chapter_heading"],
+        part_code=r["part_code"],
+        part_heading=r["part_heading"],
+        division_code=r["division_code"],
+        division_heading=r["division_heading"],
+        hierarchy_kind=_hierarchy_kind_from_row(r),
+        section_code=r["section_code"],
+        section_heading=r["section_heading"],
+        start_page=r["start_page"],
+        end_page=r["end_page"],
+        review_status=r["review_status"],
+        annotation_count=r["annotation_count"],
+        sort_order=r["sort_order"],
+        quality_flags=_quality_flags_from_row(r),
+    )
+
+
+_SECTION_META_COLS = """
+    s.id, s.document_id, s.chapter_code, s.chapter_heading, s.part_code, s.part_heading,
+    s.division_code, s.division_heading, s.hierarchy_kind, s.section_code, s.section_heading,
+    s.start_page, s.end_page, s.review_status, s.sort_order, s.quality_flags
+"""
+
 
 @router.get("/{document_id}/sections", response_model=list[SectionMetadataResponse])
 async def list_sections(document_id: str, db: aiosqlite.Connection = Depends(get_db)):
@@ -18,11 +70,9 @@ async def list_sections(document_id: str, db: aiosqlite.Connection = Depends(get
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Document not found")
 
-    query = """
+    query = f"""
         SELECT 
-            s.id, s.document_id, s.chapter_code, s.chapter_heading, s.part_code, s.part_heading,
-            s.division_code, s.division_heading, s.section_code, s.section_heading,
-            s.start_page, s.end_page, s.review_status, s.sort_order,
+            {_SECTION_META_COLS},
             COUNT(a.id) as annotation_count
         FROM sections s
         LEFT JOIN annotations a ON a.section_id = s.id
@@ -33,32 +83,15 @@ async def list_sections(document_id: str, db: aiosqlite.Connection = Depends(get
     async with db.execute(query, (document_id,)) as cursor:
         rows = await cursor.fetchall()
 
-    return [SectionMetadataResponse(
-        id=r["id"],
-        document_id=r["document_id"],
-        chapter_code=r["chapter_code"],
-        chapter_heading=r["chapter_heading"],
-        part_code=r["part_code"],
-        part_heading=r["part_heading"],
-        division_code=r["division_code"],
-        division_heading=r["division_heading"],
-        section_code=r["section_code"],
-        section_heading=r["section_heading"],
-        start_page=r["start_page"],
-        end_page=r["end_page"],
-        review_status=r["review_status"],
-        annotation_count=r["annotation_count"],
-        sort_order=r["sort_order"]
-    ) for r in rows]
+    return [SectionMetadataResponse(**_section_metadata_kwargs(r)) for r in rows]
 
 @router.get("/{document_id}/sections/{section_id}", response_model=SectionResponse)
 async def get_section(document_id: str, section_id: str, db: aiosqlite.Connection = Depends(get_db)):
     # Get section main data
-    query = """
+    query = f"""
         SELECT 
-            s.id, s.document_id, s.chapter_code, s.chapter_heading, s.part_code, s.part_heading,
-            s.division_code, s.division_heading, s.section_code, s.section_heading,
-            s.start_page, s.end_page, s.review_status, s.sort_order, s.html_content, s.plain_text,
+            {_SECTION_META_COLS},
+            s.html_content, s.plain_text,
             COUNT(a.id) as annotation_count
         FROM sections s
         LEFT JOIN annotations a ON a.section_id = s.id
@@ -86,21 +119,7 @@ async def get_section(document_id: str, section_id: str, db: aiosqlite.Connectio
     ) for fn in fn_rows]
 
     return SectionResponse(
-        id=r["id"],
-        document_id=r["document_id"],
-        chapter_code=r["chapter_code"],
-        chapter_heading=r["chapter_heading"],
-        part_code=r["part_code"],
-        part_heading=r["part_heading"],
-        division_code=r["division_code"],
-        division_heading=r["division_heading"],
-        section_code=r["section_code"],
-        section_heading=r["section_heading"],
-        start_page=r["start_page"],
-        end_page=r["end_page"],
-        review_status=r["review_status"],
-        annotation_count=r["annotation_count"],
-        sort_order=r["sort_order"],
+        **_section_metadata_kwargs(r),
         html_content=r["html_content"],
         plain_text=r["plain_text"],
         footnotes=footnotes
@@ -108,11 +127,10 @@ async def get_section(document_id: str, section_id: str, db: aiosqlite.Connectio
 
 @router.get("/{document_id}/sections/by-page/{page_number}", response_model=list[SectionResponse])
 async def get_sections_by_page(document_id: str, page_number: int, db: aiosqlite.Connection = Depends(get_db)):
-    query = """
+    query = f"""
         SELECT 
-            s.id, s.document_id, s.chapter_code, s.chapter_heading, s.part_code, s.part_heading,
-            s.division_code, s.division_heading, s.section_code, s.section_heading,
-            s.start_page, s.end_page, s.review_status, s.sort_order, s.html_content, s.plain_text,
+            {_SECTION_META_COLS},
+            s.html_content, s.plain_text,
             COUNT(a.id) as annotation_count
         FROM sections s
         LEFT JOIN annotations a ON a.section_id = s.id
@@ -140,21 +158,7 @@ async def get_sections_by_page(document_id: str, page_number: int, db: aiosqlite
         ) for fn in fn_rows]
 
         results.append(SectionResponse(
-            id=r["id"],
-            document_id=r["document_id"],
-            chapter_code=r["chapter_code"],
-            chapter_heading=r["chapter_heading"],
-            part_code=r["part_code"],
-            part_heading=r["part_heading"],
-            division_code=r["division_code"],
-            division_heading=r["division_heading"],
-            section_code=r["section_code"],
-            section_heading=r["section_heading"],
-            start_page=r["start_page"],
-            end_page=r["end_page"],
-            review_status=r["review_status"],
-            annotation_count=r["annotation_count"],
-            sort_order=r["sort_order"],
+            **_section_metadata_kwargs(r),
             html_content=r["html_content"],
             plain_text=r["plain_text"],
             footnotes=footnotes
