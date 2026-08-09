@@ -18,10 +18,11 @@ backend/uploads/*
 !backend/uploads/.gitkeep
 !backend/data/.gitkeep
 
-# Source PDFs are static and are NOT carried in git (they were 163 MB of it).
-# Populate the server's uploads volume once -- see "Seeding storage" in README.md.
-backend/seed_uploads/*
-!backend/seed_uploads/.gitkeep
+# Seed storage is NOT carried in git and was purged from history (2026-08-09):
+# 365 MB of source PDFs that never change, and 441 MB of seed-database revisions.
+# Populate a deployment once -- see "Seeding storage" in README.md.
+backend/seed_uploads/
+backend/seed_data/
 
 # System files
 .DS_Store

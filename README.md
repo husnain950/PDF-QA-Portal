@@ -102,17 +102,24 @@ between versions) in the Versions panel.
 
 ### Seeding storage
 
-**Source PDFs are not carried in git.** They were 163 MB of repository and they never
-change. `backend/seed_uploads/` is now ignored; populate the server's uploads volume
-once, by either:
+**Neither the source PDFs nor the seed database are carried in git**, and both were
+purged from history on 2026-08-09 — they were 806 MB of a repository whose actual source
+is 5 MB, and the PDFs never change. A fresh clone therefore starts with no documents.
+Populate a deployment once, by either:
 
 ```bash
-# a) copy an existing store onto the volume
+# a) copy an existing store onto the volume (database + PDFs)
+rsync -a backend/data/    <server>:/path/to/backend/data/
 rsync -a backend/uploads/ <server>:/path/to/backend/uploads/
 
-# b) or rebuild it from the pipeline
+# b) or rebuild the ACT corpus from the pipeline (starts from an empty database)
 .venv/bin/python -m backend.sync_acts --acts-repo <Acts_fbr>
 ```
+
+Option (b) rebuilds the 80 ACT-corpus documents but not the manually uploaded Income Tax
+Ordinance editions; use (a) to carry those, or re-upload them through the portal.
+`backend/seed_data/qa_portal.db` and `backend/seed_uploads/` are still honoured at boot
+when present, so dropping files there is a third way in — they are just no longer shipped.
 
 Then confirm every document resolves to a readable PDF:
 
