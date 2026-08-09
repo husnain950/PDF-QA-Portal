@@ -145,7 +145,8 @@ async def upload_document(
     # failed ingest leaves behind nothing but an unreferenced (and reusable) blob rather
     # than a half-written pair that has to be unlinked by hand.
     try:
-        pdf_filename = blob_store.store_bytes(await pdf.read(), "pdf")
+        # Streamed, not buffered: a large PDF must not be held in memory at once.
+        pdf_filename = await blob_store.store_upload(pdf, "pdf")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save PDF file: {e}")
 

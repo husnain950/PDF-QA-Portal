@@ -443,3 +443,55 @@ async def test_the_workflow_this_all_exists_for(runtime_sandbox):
             assert (await cursor.fetchone())["plain_text"] == "Second section"
         async with db.execute("SELECT COUNT(*) FROM annotations") as cursor:
             assert (await cursor.fetchone())[0] == 1, "rollback must not drop findings"
+
+
+@pytest.mark.asyncio
+async def test_upload_is_streamed_not_buffered(runtime_sandbox):
+    """A large PDF must never be held in memory in one piece.
+
+    Buffering it took the 256 MB deployment down mid-import, so this pins the read
+    size: the store must pull the file in chunks, and still land on the same content
+    address as an equivalent in-memory write.
+    """
+    payload = _pdf_bytes(40)
+
+    class CountingUpload:
+        def __init__(self, data):
+            self._buffer = io.BytesIO(data)
+            self.reads = []
+
+        async def read(self, size=-1):
+            chunk = self._buffer.read(size)
+            self.reads.append(size)
+            return chunk
+
+    upload = CountingUpload(payload)
+    name = await blob_store.store_upload(upload, "pdf")
+
+    assert all(size == blob_store._CHUNK for size in upload.reads), upload.reads
+    assert len(upload.reads) >= 1
+    assert name == blob_store.store_bytes(payload, "pdf"), "same bytes, same address"
+    with open(blob_store.blob_path(name), "rb") as stored:
+        assert stored.read() == payload
+    # No partial file is left behind under the kind directory.
+    leftovers = list(Path(runtime_sandbox["upload_dir"]).glob("pdf/.incoming.*"))
+    assert leftovers == [], leftovers
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_leaves_no_partial_blob(runtime_sandbox):
+    class ExplodingUpload:
+        def __init__(self):
+            self.calls = 0
+
+        async def read(self, size=-1):
+            self.calls += 1
+            if self.calls == 1:
+                return b"%PDF-1.4 partial"
+            raise OSError("connection dropped")
+
+    with pytest.raises(OSError):
+        await blob_store.store_upload(ExplodingUpload(), "pdf")
+
+    upload_dir = Path(runtime_sandbox["upload_dir"])
+    assert list(upload_dir.glob("pdf/*")) == []

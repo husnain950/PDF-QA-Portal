@@ -104,6 +104,45 @@ def store_file(source: str | os.PathLike, kind: str) -> str:
     return name
 
 
+async def store_upload(upload, kind: str) -> str:
+    """Stream an uploaded file to the store without holding it in memory.
+
+    ``store_bytes(await upload.read(), ...)`` buffers the whole file, which is fine
+    locally and fatal on a small container: a 57 MB PDF took the 256 MB deployment down
+    mid-import. The hash is computed as the bytes go past, so the content address costs
+    no second pass.
+
+    ``upload`` is anything with an async ``read(size)`` -- Starlette's ``UploadFile``.
+    """
+    if kind not in SUFFIXES:
+        raise ValueError(f"unknown blob kind: {kind}")
+    directory = os.path.join(upload_root(), kind)
+    os.makedirs(directory, exist_ok=True)
+    staged = os.path.join(directory, f".incoming.{os.getpid()}.{id(upload):x}")
+    digest = hashlib.sha256()
+    try:
+        with open(staged, "wb") as target:
+            while True:
+                chunk = await upload.read(_CHUNK)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                target.write(chunk)
+            target.flush()
+            os.fsync(target.fileno())
+        name = rel_name(kind, digest.hexdigest())
+        destination = blob_path(name)
+        if usable(destination):
+            os.remove(staged)      # already stored; the upload was a duplicate
+        else:
+            os.replace(staged, destination)
+        return name
+    except BaseException:
+        if os.path.exists(staged):
+            os.remove(staged)
+        raise
+
+
 def _write_bytes(path: str, data: bytes) -> None:
     with open(path, "wb") as target:
         target.write(data)
