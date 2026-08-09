@@ -42,26 +42,26 @@ Storage is content-addressed — `backend/uploads/pdf/<sha256>.pdf` and
 `backend/uploads/json/<sha256>.json` — so the same source PDF shared by several
 documents is stored once, and an unchanged JSON produces no new version at all.
 
-### Sync the ACT corpus from the Acts_fbr pipeline
+### Sync a corpus from its pipeline repository
 
 Point the sync straight at the pipeline repository. It pairs every corpus JSON
-(`output/*.json`) with the PDF named in its own `metadata.filename` under `Acts/**`,
-detecting PDFs by magic bytes because several corpus sources carry no `.pdf` suffix.
+(`output/*.json`) with the PDF named in its own `metadata.filename`, detecting PDFs by
+magic bytes because several corpus sources carry no `.pdf` suffix. Sources are looked for
+under `Acts/` when that exists and otherwise anywhere in the repository, skipping
+`output/` and any nested pipeline (so scanning `CC-FBR/` does not reach into
+`CC-FBR/Acts_fbr/Acts/`). `--pdf-dir` overrides that.
 
-Read-only audit first:
-
-```bash
-.venv/bin/python -m backend.sync_acts \
-  --acts-repo /Users/muhammad.husnain/Downloads/code/CC-FBR/Acts_fbr \
-  --dry-run
-```
-
-Then import:
+Both corpora are synced the same way:
 
 ```bash
-.venv/bin/python -m backend.sync_acts \
-  --acts-repo /Users/muhammad.husnain/Downloads/code/CC-FBR/Acts_fbr
+# the Acts (80 editions)
+.venv/bin/python -m backend.sync_acts --acts-repo <CC-FBR>/Acts_fbr --metrics
+
+# the Income Tax Ordinance (12 editions)
+.venv/bin/python -m backend.sync_acts --acts-repo <CC-FBR> --metrics
 ```
+
+Add `--dry-run` to audit without writing anything.
 
 An identical second run reports every unchanged edition as `skipped`. A changed JSON
 lands as that document's next version; reviewer findings on changed leaves are

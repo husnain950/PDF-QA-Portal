@@ -289,3 +289,82 @@ async def test_identical_pdf_across_documents_is_stored_once(runtime_sandbox):
     upload_dir = Path(runtime_sandbox["upload_dir"])
     assert len(list(upload_dir.glob("pdf/*.pdf"))) == 1, "identical PDFs must dedupe"
     assert len(list(upload_dir.glob("json/*.json"))) == 1
+
+
+def _write_edition(repo, pdf_dir_name, stem, pdf_name, pages=3):
+    """A converted edition: JSON in output/, its PDF under an arbitrary folder."""
+    (repo / "output").mkdir(parents=True, exist_ok=True)
+    pdf_dir = repo / pdf_dir_name
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=612, height=792)
+    with (pdf_dir / pdf_name).open("wb") as handle:
+        writer.write(handle)
+    payload = json.loads(sample_document())
+    payload["metadata"]["filename"] = pdf_name
+    (repo / "output" / f"{stem}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_discovery_finds_sources_outside_an_Acts_directory(tmp_path):
+    """The Ordinance pipeline keeps its PDFs beside output/ under its own folder name.
+
+    Hardcoding ``Acts/`` meant that whole corpus could not be synced at all.
+    """
+    repo = tmp_path / "CC-FBR"
+    _write_edition(
+        repo,
+        "Income Tax Ordinance, 2001",
+        "Income Tax Ordinance 2001 - amended upto 30.06.2024",
+        "Income Tax Ordinance, 2001 Amended upto 30.06.2024.pdf",
+    )
+
+    pairs, unmatched = discover_acts_repo(repo)
+    assert unmatched == []
+    assert [p.source_key for p in pairs] == [
+        "Income Tax Ordinance 2001 - amended upto 30.06.2024"
+    ]
+    assert pairs[0].pdf_path.parent.name == "Income Tax Ordinance, 2001"
+
+
+def test_discovery_skips_output_and_nested_pipeline_repositories(tmp_path):
+    """Scanning CC-FBR/ must not reach into CC-FBR/Acts_fbr/Acts/.
+
+    A nested pipeline owns its own sources; pulling them in here would pair one
+    corpus's JSON against another corpus's PDFs.
+    """
+    repo = tmp_path / "CC-FBR"
+    _write_edition(repo, "Income Tax Ordinance, 2001", "Ordinance 2024", "Ordinance.pdf")
+
+    # A nested repository, identified by having its own output/.
+    nested = repo / "Acts_fbr"
+    _write_edition(nested, "Acts", "Customs 2025", "Customs.pdf")
+
+    # A decoy PDF inside output/ must never be treated as a source.
+    (repo / "output" / "stray.pdf").write_bytes(b"%PDF-1.4 stray")
+
+    pairs, unmatched = discover_acts_repo(repo)
+    assert [p.source_key for p in pairs] == ["Ordinance 2024"]
+    assert "Acts_fbr" not in str(pairs[0].pdf_path)
+    assert unmatched == []
+
+    # The nested repository still syncs perfectly well on its own.
+    nested_pairs, _ = discover_acts_repo(nested)
+    assert [p.source_key for p in nested_pairs] == ["Customs 2025"]
+
+
+def test_explicit_pdf_dir_overrides_the_default_search(tmp_path):
+    repo = tmp_path / "repo"
+    _write_edition(repo, "sources", "Edition A", "A.pdf")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    pairs, _ = discover_acts_repo(repo, pdf_dir=repo / "sources")
+    assert len(pairs) == 1
+
+    # Pointed at a directory with no PDFs, nothing resolves -- and it says so.
+    with pytest.raises(ValueError, match="No corpus JSON matched"):
+        discover_acts_repo(repo, pdf_dir=elsewhere)
+
+    with pytest.raises(ValueError, match="PDF directory does not exist"):
+        discover_acts_repo(repo, pdf_dir=tmp_path / "nope")

@@ -119,24 +119,55 @@ def discover_pairs(source: Path) -> List[ExportPair]:
     return pairs
 
 
-def discover_acts_repo(root: Path) -> Tuple[List[ExportPair], List[str]]:
-    """Pair ``output/*.json`` with its source PDF under ``Acts/``.
+def _source_pdf_index(root: Path, pdf_dir: Optional[Path]) -> Dict[str, Path]:
+    """Every source PDF in a pipeline repository, indexed by basename.
 
-    Returns ``(pairs, unmatched)``. A JSON whose PDF cannot be found is reported, never
-    guessed at: the mapping is by exact ``metadata.filename``, which resolves the whole
-    live corpus, so a miss means something really is wrong upstream.
+    ``Acts_fbr`` keeps its sources under ``Acts/``; the Income Tax Ordinance pipeline
+    keeps them beside ``output/`` in a differently named folder. Rather than hardcode
+    either, search from the given directory (or the repository root), skipping
+    ``output/`` -- which holds converted JSON, not sources -- and any nested directory
+    that is itself a pipeline repository, so scanning ``CC-FBR/`` does not drag in
+    ``CC-FBR/Acts_fbr/Acts/``.
     """
-    root = root.expanduser().resolve()
-    output_dir, acts_dir = root / "output", root / "Acts"
-    if not output_dir.is_dir():
-        raise ValueError(f"Not an Acts pipeline repository (no output/): {root}")
-    if not acts_dir.is_dir():
-        raise ValueError(f"Not an Acts pipeline repository (no Acts/): {root}")
+    search_root = pdf_dir if pdf_dir is not None else (
+        root / "Acts" if (root / "Acts").is_dir() else root
+    )
+    if not search_root.is_dir():
+        raise ValueError(f"PDF directory does not exist: {search_root}")
 
     by_name: Dict[str, Path] = {}
-    for candidate in sorted(acts_dir.rglob("*")):
-        if candidate.is_file() and not candidate.is_symlink() and is_pdf(candidate):
-            by_name.setdefault(candidate.name, candidate)
+    stack = [search_root]
+    while stack:
+        directory = stack.pop()
+        for entry in sorted(directory.iterdir()):
+            if entry.is_symlink():
+                continue
+            if entry.is_dir():
+                if entry.name in {"output", ".git", "__pycache__", "node_modules"}:
+                    continue
+                if entry != search_root and (entry / "output").is_dir():
+                    continue  # a nested pipeline repository owns its own sources
+                stack.append(entry)
+            elif entry.is_file() and is_pdf(entry):
+                by_name.setdefault(entry.name, entry)
+    return by_name
+
+
+def discover_acts_repo(
+    root: Path, pdf_dir: Optional[Path] = None
+) -> Tuple[List[ExportPair], List[str]]:
+    """Pair ``output/*.json`` with its source PDF.
+
+    Returns ``(pairs, unmatched)``. A JSON whose PDF cannot be found is reported, never
+    guessed at: the mapping is by exact ``metadata.filename``, which resolves both live
+    corpora, so a miss means something really is wrong upstream.
+    """
+    root = root.expanduser().resolve()
+    output_dir = root / "output"
+    if not output_dir.is_dir():
+        raise ValueError(f"Not a pipeline repository (no output/): {root}")
+
+    by_name = _source_pdf_index(root, pdf_dir)
 
     pairs, unmatched = [], []
     for json_path in sorted(output_dir.glob("*.json"), key=lambda p: p.name.casefold()):
@@ -353,9 +384,10 @@ async def run_sync(
     acts_repo: bool = False,
     strict: bool = False,
     metrics_dir: Optional[Path] = None,
+    pdf_dir: Optional[Path] = None,
 ) -> Dict[str, object]:
     if acts_repo:
-        pairs, unmatched = discover_acts_repo(source)
+        pairs, unmatched = discover_acts_repo(source, pdf_dir)
     else:
         pairs, unmatched = discover_pairs(source), []
 
@@ -450,6 +482,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing one folder per exported Act or edition",
     )
     parser.add_argument(
+        "--pdf-dir",
+        type=Path,
+        help=(
+            "Where the source PDFs live. Defaults to <repo>/Acts when present, "
+            "otherwise the repository root (skipping output/ and nested pipelines)"
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate the complete corpus without writing files or database rows",
@@ -495,6 +535,7 @@ def main() -> int:
                 acts_repo=args.acts_repo is not None,
                 strict=args.strict,
                 metrics_dir=metrics_dir,
+                pdf_dir=args.pdf_dir,
             )
         )
     except Exception as error:
