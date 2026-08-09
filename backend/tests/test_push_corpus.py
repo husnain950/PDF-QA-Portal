@@ -56,3 +56,33 @@ def test_multipart_uses_a_fresh_boundary_each_call(tmp_path):
     _, first = push_corpus.multipart({"name": "a"}, files)
     _, second = push_corpus.multipart({"name": "a"}, files)
     assert first != second
+
+
+def test_risky_documents_are_ordered_first():
+    """The largest documents must go while a crash is still free.
+
+    On a deployment without persistent storage, a document that OOMs the container
+    destroys everything already uploaded. Sending the risky ones last -- which is what
+    ascending size does -- put failure exactly where it cost the most: 89 of 91
+    documents were lost that way, twice. They now go first, against an empty database.
+    """
+    mb = 1048576
+    pending = [
+        (1 * mb, "tiny", "t.pdf", "t.json"),
+        (60 * mb, "huge", "h.pdf", "h.json"),
+        (2 * mb, "small", "s.pdf", "s.json"),
+        (20 * mb, "big", "b.pdf", "b.json"),
+    ]
+    risky, rest = push_corpus.plan_order(pending, 15 * mb)
+
+    assert [item[1] for item in risky] == ["huge", "big"], "largest first"
+    assert [item[1] for item in rest] == ["tiny", "small"], "then smallest-first"
+    assert len(risky) + len(rest) == len(pending), "nothing may be dropped"
+
+
+def test_plan_order_handles_an_all_small_corpus():
+    mb = 1048576
+    pending = [(1 * mb, "a", "", ""), (2 * mb, "b", "", "")]
+    risky, rest = push_corpus.plan_order(pending, 15 * mb)
+    assert risky == []
+    assert [item[1] for item in rest] == ["a", "b"]
