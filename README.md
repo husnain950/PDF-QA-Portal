@@ -121,6 +121,25 @@ Ordinance editions; use (a) to carry those, or re-upload them through the portal
 `backend/seed_data/qa_portal.db` and `backend/seed_uploads/` are still honoured at boot
 when present, so dropping files there is a third way in — they are just no longer shipped.
 
+**Seeding a deployment you cannot reach with a shell.** A hosted instance has neither the
+source PDFs nor the pipeline repositories, so `sync_acts` cannot run there. Push the local
+corpus in over the portal's own API instead:
+
+```bash
+.venv/bin/python -m backend.push_corpus --base-url https://your-portal.example.com --dry-run
+.venv/bin/python -m backend.push_corpus --base-url https://your-portal.example.com
+```
+
+Smallest documents first, skipping anything already present by name, so it is safe to
+re-run and to resume after an interruption. These land as `source_type='upload'`, so they
+carry no pipeline health metrics — where the server *can* see the pipeline repositories,
+`sync_acts` is the better route.
+
+> **A hosted deployment needs persistent storage for `backend/data` and `backend/uploads`.**
+> Neither is in git any more, so a container that rebuilds from the image alone comes up
+> with an empty portal. Mount a volume for both (the `docker-compose.yml` service already
+> maps them) and seed it once.
+
 Then confirm every document resolves to a readable PDF:
 
 ```bash
